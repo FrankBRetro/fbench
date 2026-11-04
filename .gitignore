@@ -1,0 +1,6 @@
+# build output (the released binary lives in release/)
+*.o
+/fbench.prg
+# run-time files Fbench writes next to itself
+FBLAST.LOG
+FBENCH.INF
