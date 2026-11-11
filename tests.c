@@ -62,6 +62,7 @@ short trace_steps;          /* Options > Trace test steps (debug, slows tests) *
    hang inside a test names the exact AES call. */
 void fb_step(const char *s)
 {
+#if FB_DEBUG
     char p[180];
     FILE *f;
     if (!step_on || step_test < 0) return;
@@ -88,6 +89,9 @@ void fb_step(const char *s)
                 FB_VERSION, tests[step_test].key, tests[step_test].name, step_op + 1, s);
         fclose(f);
     }
+#else
+    (void)s;
+#endif
 }        /* >0: stop after this many operations */
 
 static long time_test(void (*body)(void))
@@ -1212,6 +1216,7 @@ void bench_close(void)
  * that is starting. It is deleted when a run ends normally, so if it is
  * still there after a crash it names the test that crashed.
  */
+#if FB_DEBUG
 static void crumb_path(char *p)
 {
     strcpy(p, home_dir);
@@ -1245,6 +1250,12 @@ void crumb_clear(void)
     crumb_path(p);
     remove(p);
 }
+#else
+/* release build: no crash log */
+void crumb_text(const char *s) { (void)s; }
+static void crumb(short i)     { (void)i; }
+void crumb_clear(void)         { }
+#endif
 
 short run_tests(short all)
 {

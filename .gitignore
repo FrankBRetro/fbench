@@ -1,6 +1,12 @@
 # build output (the released binary lives in release/)
 *.o
+obj/
+obj-debug/
 /fbench.prg
+# debug build (make debug) - not released
+/FBENCHD.PRG
 # run-time files Fbench writes next to itself
 FBLAST.LOG
 FBENCH.INF
+# macOS
+.DS_Store

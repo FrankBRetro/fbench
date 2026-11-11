@@ -7,4 +7,8 @@
 #endif
 #define STR2(x) #x
 #define STR(x) STR2(x)
+#if defined(FB_DEBUG) && FB_DEBUG
+const char fb_version[] = FB_VER "." STR(FB_BUILD) "-debug";
+#else
 const char fb_version[] = FB_VER "." STR(FB_BUILD);
+#endif

@@ -41,6 +41,13 @@ static inline long fb_xbios64(short mode)
 extern const char fb_version[];
 #define FB_VERSION  fb_version
 
+/* FB_DEBUG=1 (make debug -> FBENCHD.PRG): crash breadcrumbs in FBLAST.LOG
+   and the "Trace test steps" option.  Release builds (make) have no
+   logging at all: no file is written while tests run. */
+#ifndef FB_DEBUG
+#define FB_DEBUG 0
+#endif
+
 #define MAX_TESTS   128
 #define MAX_BASE    4
 #define MAX_FONTS   64

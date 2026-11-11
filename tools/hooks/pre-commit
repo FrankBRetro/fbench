@@ -1,0 +1,27 @@
+#!/bin/sh
+# Fbench pre-commit hook: every commit gets the next version number and a
+# release binary built with it.  Enable once per checkout with:
+#     git config core.hooksPath tools/hooks
+#
+# Needs the MiNT cross toolchain (m68k-atari-mint-gcc).  Without it the
+# commit is stopped, because the binary would not match the version.  For a
+# commit that really should not touch the version or the binary (docs
+# only), use:  FB_NO_BUMP=1 git commit ...
+
+[ -n "$FB_NO_BUMP" ] && exit 0
+
+if ! command -v m68k-atari-mint-gcc >/dev/null 2>&1; then
+    echo "pre-commit: m68k-atari-mint-gcc not found - can't build the release" >&2
+    echo "binary for the new version. Commit from the machine with the Atari" >&2
+    echo "toolchain, or use FB_NO_BUMP=1 for a commit without a new version." >&2
+    exit 1
+fi
+
+make bump || exit 1
+if ! make; then
+    echo "pre-commit: build failed - commit stopped (BUILD was bumped;" >&2
+    echo "fix the error and commit again)." >&2
+    exit 1
+fi
+git add BUILD release/FBENCH.PRG || exit 1
+echo "pre-commit: release/FBENCH.PRG is Fbench $(cat VERSION).$(cat BUILD)"

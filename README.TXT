@@ -6,11 +6,19 @@ in every ST resolution (and TT/Falcon modes). Uses more colour for the
 results when the screen has 4 or 16+ colours; never changes the palette.
 
 BUILD
-  make            (needs m68k-atari-mint-gcc, gemlib, mintlib)
-  -> release/FBENCH.PRG   (no resource file needed - menu is built at run time)
-  Version: VERSION holds the release (1.1); BUILD is a counter that make
-  raises by one every time FBENCH.PRG is linked, giving 1.1.1, 1.1.2...
-  The full number is in About, every report and every profile.
+  make            release build -> release/FBENCH.PRG (no logging)
+  make debug      debug build   -> FBENCHD.PRG: writes the FBLAST.LOG crash
+                  breadcrumbs and has Options > Trace test steps
+  (needs m68k-atari-mint-gcc, gemlib, mintlib; no resource file needed -
+  the menu is built at run time)
+
+  Version: 1.1.<BUILD>, from the VERSION and BUILD files. Every git commit
+  gets the next number: the pre-commit hook in tools/hooks bumps BUILD,
+  rebuilds release/FBENCH.PRG and adds both to the commit, so a commit's
+  binary always shows that commit's version. Enable it once per checkout:
+      git config core.hooksPath tools/hooks
+  Plain "make" does not change the number. The version is shown in About,
+  the results window title, every report and every profile.
 
 MENUS  (short titles are used in ST Low)
   Fbench    About; desk accessories. Fbench also registers its name in
@@ -146,9 +154,10 @@ MOUSE VISIBLE IN TESTS  (Options menu; on by default under MultiTOS)
   timings much. Turn the option off for the classic hidden pointer.
 
 NOTES
-  * Crash breadcrumb: before each test Fbench writes FBLAST.LOG (in the
-    directory it was started from) naming that test; it is deleted when
-    a run ends normally. If Fbench crashes, FBLAST.LOG says which test.
+  * Debug build only (make debug): before each test Fbench writes
+    FBLAST.LOG (in the directory it was started from) naming that test;
+    it is deleted when a run ends normally. If Fbench crashes, FBLAST.LOG
+    says which test. The release build writes no log.
   * "Load+unload fonts" runs only 3 cycles and is off by default: some
     GDOS versions crash when fonts are loaded over and over.
   * "Text 10pt bold" (GDOS) is off by default. The VDI's text-effects
@@ -167,7 +176,7 @@ NOTES
     blitter is shown as "on (fixed)", the Blitter menu item and the
     blitter report are disabled, and profiles record BLITCTL=fixed,
     which the comparison PDF marks with a dagger.
-  * Options > Trace test steps (debug, off by default): each step of a
+  * Options > Trace test steps (debug build only, off by default): each step of a
     test's first 16 operations is written to FBLAST.LOG and shown at the
     bottom of the test window, so a hang names the exact call. It writes
     to disk inside the timed loop, so leave it off for real results.

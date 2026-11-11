@@ -100,7 +100,9 @@ static const MITEM m_opts[] = {
     { C_DLONG,    "  Duration: 3 s" }, SEP,
     { C_NEXTFONT, "  Next GDOS font    ^F" }, SEP,
     { C_MOUSEVIS, "  Mouse visible in tests" },
+#if FB_DEBUG
     { C_TRACE,    "  Trace test steps (debug)" },
+#endif
     { -1, NULL }
 };
 static const MITEM m_win[] = {
@@ -1019,8 +1021,9 @@ static void save_inf(void)
 
 static void results_title(void)
 {
-    if (machine_desc[0]) sprintf(res_title, " Fbench - %s ", machine_desc);
-    else                 strcpy(res_title, " Fbench results ");
+    /* the version is in the title, so every screenshot shows it */
+    if (machine_desc[0]) sprintf(res_title, " Fbench %s - %.32s ", FB_VERSION, machine_desc);
+    else                 sprintf(res_title, " Fbench %s results ", FB_VERSION);
 }
 
 /* Dialog built in code: one editable 32-character field, OK / Cancel */
