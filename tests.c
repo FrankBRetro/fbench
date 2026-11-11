@@ -24,7 +24,14 @@ const char *group_name[NGROUPS] = { "VDI primitives", "AES windows & events",
 static char  cur_note[28];
 static short cur_param;                 /* TEST.param of the running test */
 static short ax, ay, aw, ah;            /* drawing area (test window work) */
-static short pts[256][2];               /* pre-computed random points      */
+static short pts[256][2];
+/* Positions for raster copies (vro_cpyfm / vrt_cpyfm): the whole RBLK x RBLK
+   block, plus 16 px for alignment shifts, stays inside the test area.  The
+   VDI of TOS 1.x does not clip raster copies, so a block running past the
+   bottom of the screen read and wrote beyond screen memory - past the end
+   of RAM on a 4 MB machine - and crashed (VDI.CPY64 on TOS 1.06). */
+#define RBLK 64
+static short rpts[256][2];               /* pre-computed random points      */
 static short rad[256];                  /* pre-computed random radii       */
 static unsigned char pi;                /* index into the tables (wraps)   */
 static short sys_th;                    /* default system text height      */
@@ -167,6 +174,8 @@ static void area_setup(void)
         pts[i][0] = ax + rnd(aw);
         pts[i][1] = ay + rnd(ah);
         rad[i] = 4 + rnd(rmax);
+        rpts[i][0] = ax + rnd(aw - RBLK - 16 > 1 ? aw - RBLK - 16 : 1);
+        rpts[i][1] = ay + rnd(ah - RBLK > 1 ? ah - RBLK : 1);
     }
     pi = 0;
     tog = 0;
@@ -333,8 +342,8 @@ static void b_attrs(void)  { vsl_color(bh, 1); vsf_color(bh, 1); vst_color(bh, 1
 static void b_cpy64(void)
 {
     short p[8], a = NX(), b = NX();
-    p[0] = pts[a][0]; p[1] = pts[a][1]; p[2] = p[0] + 63; p[3] = p[1] + 63;
-    p[4] = pts[b][0]; p[5] = pts[b][1]; p[6] = p[4] + 63; p[7] = p[5] + 63;
+    p[0] = rpts[a][0]; p[1] = rpts[a][1]; p[2] = p[0] + 63; p[3] = p[1] + 63;
+    p[4] = rpts[b][0]; p[5] = rpts[b][1]; p[6] = p[4] + 63; p[7] = p[5] + 63;
     vro_cpyfm(bh, S_ONLY, p, &scr_mfdb, &scr_mfdb);
 }
 
@@ -383,13 +392,13 @@ static void b_mem2scr(void)
 {
     short p[8], k = NX();
     p[0] = 0; p[1] = 0; p[2] = 63; p[3] = 63;
-    p[4] = pts[k][0]; p[5] = pts[k][1]; p[6] = p[4] + 63; p[7] = p[5] + 63;
+    p[4] = rpts[k][0]; p[5] = rpts[k][1]; p[6] = p[4] + 63; p[7] = p[5] + 63;
     vro_cpyfm(bh, S_ONLY, p, &off_mfdb, &scr_mfdb);
 }
 static void b_scr2mem(void)
 {
     short p[8], k = NX();
-    p[0] = pts[k][0]; p[1] = pts[k][1]; p[2] = p[0] + 63; p[3] = p[1] + 63;
+    p[0] = rpts[k][0]; p[1] = rpts[k][1]; p[2] = p[0] + 63; p[3] = p[1] + 63;
     p[4] = 0; p[5] = 0; p[6] = 63; p[7] = 63;
     vro_cpyfm(bh, S_ONLY, p, &scr_mfdb, &off_mfdb);
 }
@@ -409,7 +418,7 @@ static void b_vrt(void)
     short p[8], c[2], k = NX();
     c[0] = col(k); c[1] = 0;
     p[0] = 0; p[1] = 0; p[2] = 63; p[3] = 63;
-    p[4] = pts[k][0]; p[5] = pts[k][1]; p[6] = p[4] + 63; p[7] = p[5] + 63;
+    p[4] = rpts[k][0]; p[5] = rpts[k][1]; p[6] = p[4] + 63; p[7] = p[5] + 63;
     vrt_cpyfm(bh, MD_TRANS, p, &mono_mfdb, &scr_mfdb, c);
 }
 
@@ -602,19 +611,25 @@ static void b_wscroll(void)   { scroll_win(wins[WN_TEST].h); }
 
 /* mode 1: x on 16 px; 2: x on 16 px + 3 / + 11 (alternating, so source and
    destination of a copy need different shifts); 3: x on 8 px; 4: 8 px + 3 */
+static short align_x(short x, short i, short mode)
+{
+    switch (mode) {
+    case 1: x &= ~15; break;
+    case 2: x = (x & ~15) + ((i & 1) ? 11 : 3); break;
+    case 3: x &= ~7; break;
+    case 4: x = (x & ~7) + 3; break;
+    }
+    if (x < ax) x += 16;
+    return x;
+}
+/* shifts both the drawing points and the raster-copy points; rpts keeps
+   16 px spare at the right, which covers the largest shift (+11) */
 static void align_pts(short mode)
 {
-    short i, x;
+    short i;
     for (i = 0; i < 256; i++) {
-        x = pts[i][0];
-        switch (mode) {
-        case 1: x &= ~15; break;
-        case 2: x = (x & ~15) + ((i & 1) ? 11 : 3); break;
-        case 3: x &= ~7; break;
-        case 4: x = (x & ~7) + 3; break;
-        }
-        if (x < ax) x += 16;
-        pts[i][0] = x;
+        pts[i][0]  = align_x(pts[i][0], i, mode);
+        rpts[i][0] = align_x(rpts[i][0], i, mode);
     }
 }
 static void s_rect_a(void) { s_colour(); align_pts(1); }
