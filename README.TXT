@@ -11,6 +11,7 @@ BUILD
                   breadcrumbs and has Options > Trace test steps
   (needs m68k-atari-mint-gcc, gemlib, mintlib; no resource file needed -
   the menu is built at run time)
+  make -C pcgem   PC GEM build -> pcgem/FBENCH.APP (see PC GEM below)
 
   Version: 1.1.<BUILD>, from the VERSION and BUILD files. Every git commit
   gets the next number: the pre-commit hook in tools/hooks bumps BUILD,
@@ -176,6 +177,23 @@ MOUSE VISIBLE IN TESTS  (Options menu; on by default under MultiTOS)
   that window's content is throw-away and the trails don't change the
   timings much. Turn the option off for the classic hidden pointer.
 
+PC GEM (FreeGEM / OpenGEM on DOS)
+  release/FBENCH.APP is Fbench for PC GEM: the same program, built as a
+  32-bit DJGPP program with -DPCGEM (pcgem/Makefile). It runs every test;
+  the timer is DJGPP's uclock() (1.19 MHz) counted in the same 200 Hz
+  ticks, so results compare with the Atari's. System info shows the x86
+  CPU family, DOS, the DPMI host and GEM's AES version instead of TOS and
+  the cookie jar; a PC has no blitter. It needs a 386 or later, a DPMI host
+  (CWSDPMI.EXE beside it or on the PATH) and, for the GDOS tests, XGDOS for
+  PC GEM (https://github.com/FrankBRetro/xgdos), which gives it Speedo
+  fonts. It uses EdWord's PC GEM layer (../edword/pcgem, or EDPC=...):
+      source ~/work/vibe/PC-GEM/scripts/djgppenv.sh
+      make -C pcgem          -> pcgem/FBENCH.APP
+  The pre-commit hook builds it too when the DJGPP compiler is on the
+  PATH, and copies it to release/. "make dist" adds
+  fbench-<version>-pcgem.zip (FBENCH.APP, CWSDPMI, this file, the
+  licences).
+
 NOTES
   * Debug build only (make debug): before each test Fbench writes
     FBLAST.LOG (in the directory it was started from) naming that test;
@@ -212,3 +230,11 @@ LICENCE
   The binary is linked with gemlib (public domain) and MiNTLib (mostly
   public domain / BSD; some parts LGPL - the full Fbench source is here,
   so the binary can be rebuilt and relinked).
+  The PC GEM binary (FBENCH.APP) is linked with John Elliott's GEM
+  bindings for DJGPP, based on Digital Research's GEM Programmer's
+  Toolkit and under the GNU GPL version 2, so that binary as a whole is
+  passed on under the GPL version 2; Fbench's own source stays MIT. The
+  bindings' source: https://www.seasip.info/Gem/Software/djgppgem.zip
+  CWSDPMI.EXE (in the PC zip) is Copyright (C) 1995-2010 Charles W
+  Sandmann, unmodified, with CWSDPMI.DOC; you have the right to its source
+  code and updates: http://www.delorie.com/djgpp/ (csdpmi7s.zip).

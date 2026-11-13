@@ -182,6 +182,7 @@ void  sysinfo_collect(void);
 void  sysinfo_short(char *buf, short len);
 extern long cpu_type;            /* probed: 0, 10, 20, 30, 40, 60 */
 long  cpu_probe(void);
+const char *cpu_name(void);      /* "68030", "486" ... */
 
 /* ---- PDF reports (pdfrep.c) ---- */
 short blit_report(const char *path, const RESULT *off, const RESULT *on);

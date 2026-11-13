@@ -44,6 +44,15 @@ static MFDB  scr_mfdb;                  /* fd_addr == NULL: the screen     */
 /*  Timer                                                             */
 /* ------------------------------------------------------------------ */
 
+#ifdef PCGEM
+/* the PC: DJGPP's uclock() counts the timer chip at 1.19 MHz; scaled to
+ * the Atari's 200 Hz ticks so durations and results mean the same */
+#include <time.h>
+long hz200(void)
+{
+    return (long)(uclock() * 200 / UCLOCKS_PER_SEC);
+}
+#else
 static long hz_tmp;
 static long rd_hz(void) { hz_tmp = *(volatile long *)0x4baL; return 0; }
 
@@ -52,6 +61,7 @@ long hz200(void)
     Supexec(rd_hz);
     return hz_tmp;
 }
+#endif
 
 /* returns operations per second x 10, or -1 on failure */
 static long max_iter;

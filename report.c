@@ -150,7 +150,7 @@ short profile_save(const char *path)
     fprintf(f, "BLITTER=%s\n", !blitter_present ? "none" : (blitter_on ? "on" : "off"));
     fprintf(f, "BLITCTL=%s\n", !blitter_present ? "none" : (blitter_fixed ? "fixed" : "switchable"));
     fprintf(f, "BLITSRC=%s\n", blit_src == BS_XGEM ? "xgem" : (blit_src == BS_XBIOS ? "xbios" : "none"));
-    fprintf(f, "CPU=680%02ld\n", cpu_type);
+    fprintf(f, "CPU=%s\n", cpu_name());
     fprintf(f, "DURATION=%ld\n", dur_ticks);
     fprintf(f, "SCREEN=%dx%d %d colours %d planes\n", scr_w, scr_h, ncolors, planes);
     fprintf(f, "PLANES=%d\nCOLOURS=%d\n", planes, ncolors);

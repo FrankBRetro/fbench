@@ -99,10 +99,45 @@ static long cpu_probe_super(void)
 }
 #endif
 
-/* 0, 10, 20, 30, 40 or 60 */
+#ifdef PCGEM
+/* PC: 3 (386), 4 (486), 5 (Pentium), 6 (Pentium Pro and later) - the AC
+ * flag can't be set on a 386, and CPUID (from the late 486s) gives the
+ * family; a 486 without CPUID is a 486 */
+static long x86_family(void)
+{
+    unsigned long f0, f1, a, b, c, d;
+    __asm__ volatile ("pushfl; popl %0; movl %0, %1; xorl $0x40000, %1;"
+                      "pushl %1; popfl; pushfl; popl %1; pushl %0; popfl"
+                      : "=&r"(f0), "=&r"(f1) : : "cc");
+    if (!((f0 ^ f1) & 0x40000)) return 3;               /* no AC flag: 386 */
+    __asm__ volatile ("pushfl; popl %0; movl %0, %1; xorl $0x200000, %1;"
+                      "pushl %1; popfl; pushfl; popl %1; pushl %0; popfl"
+                      : "=&r"(f0), "=&r"(f1) : : "cc");
+    if (!((f0 ^ f1) & 0x200000)) return 4;              /* no CPUID: 486 */
+    __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1UL));
+    a = (a >> 8) & 15;
+    return a >= 6 ? 6 : (long)a;
+}
+#endif
+
+const char *cpu_name(void)
+{
+#ifdef PCGEM
+    static const char *const n[] = { "386", "486", "Pentium", "Pentium Pro+" };
+    return n[cpu_type >= 3 && cpu_type <= 6 ? cpu_type - 3 : 0];
+#else
+    static char t[16];
+    sprintf(t, "680%02ld", cpu_type);
+    return t;
+#endif
+}
+
+/* 0, 10, 20, 30, 40 or 60; on the PC 3..6 */
 long cpu_probe(void)
 {
-#ifdef __mc68000__
+#ifdef PCGEM
+    return x86_family();
+#elif defined(__mc68000__)
     cpu_found = 0;
     Supexec(cpu_probe_super);
     return cpu_found;

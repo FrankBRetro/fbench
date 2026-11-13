@@ -15,3 +15,8 @@ RELEASE-*.md
 *.bundle
 # release zips (make dist)
 dist/
+# PC GEM build output (the released binary is release/FBENCH.APP)
+pcgem/obj/
+pcgem/build.log
+pcgem/fbench.exe
+pcgem/FBENCH.APP

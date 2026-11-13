@@ -60,7 +60,9 @@ obj-debug/%.o: %.c fbench.h pdf.h
 	@mkdir -p obj-debug
 	$(CC) $(CFLAGS) -DFB_DEBUG=1 -c $< -o $@
 
-# release zips (run after the commit, so the version matches the binary)
+# release zips (run after the commit, so the version matches the binary);
+# the PC GEM zip too when release/FBENCH.APP is there
+CWSDPMI ?= $(HOME)/work/vibe/PC-GEM/tools/cwsdpmi/bin
 VER = $(shell cat VERSION).$(shell cat BUILD)
 dist: $(RELEASE) $(DEBUG)
 	@mkdir -p dist
@@ -68,6 +70,17 @@ dist: $(RELEASE) $(DEBUG)
 	zip -j -X dist/fbench-$(VER).zip $(RELEASE) README.TXT LICENSE
 	zip -j -X dist/fbench-$(VER)-debug.zip $(DEBUG) README.TXT LICENSE
 	@echo "dist/fbench-$(VER).zip and dist/fbench-$(VER)-debug.zip ready"
+	@if [ -f release/FBENCH.APP ]; then \
+	  test -f $(CWSDPMI)/CWSDPMI.EXE || { echo "CWSDPMI.EXE not found: set CWSDPMI"; exit 1; }; \
+	  rm -rf dist/pcgem dist/fbench-$(VER)-pcgem.zip; mkdir -p dist/pcgem/FBENCH; \
+	  cp release/FBENCH.APP README.TXT dist/pcgem/FBENCH/; \
+	  cp LICENSE dist/pcgem/FBENCH/LICENSE.TXT; \
+	  cp $(CWSDPMI)/CWSDPMI.EXE dist/pcgem/FBENCH/; \
+	  cp $(CWSDPMI)/cwsdpmi.doc dist/pcgem/FBENCH/CWSDPMI.DOC; \
+	  (cd dist/pcgem && zip -r -X ../fbench-$(VER)-pcgem.zip FBENCH); \
+	  rm -rf dist/pcgem; \
+	  echo "dist/fbench-$(VER)-pcgem.zip ready (PC GEM)"; \
+	fi
 
 # leaves release/ alone: released binaries are kept
 clean:

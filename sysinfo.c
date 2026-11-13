@@ -18,6 +18,10 @@ static short njar;
 
 static long read_sys(void)
 {
+#ifdef PCGEM
+    njar = 0; nvdi_ver = 0;     /* no ROM header or cookie jar on the PC */
+    return 0;
+#else
     unsigned char *sb = *(unsigned char **)0x4f2L;
     long *jar;
 
@@ -42,6 +46,7 @@ static long read_sys(void)
         }
     }
     return 0;
+#endif
 }
 
 static short cookie(long id, long *val)
@@ -72,6 +77,7 @@ static void add(const char *fmt, ...)
     nsys++;
 }
 
+#ifndef PCGEM
 static const char *country_name(short c)
 {
     static const char *n[] = {
@@ -101,6 +107,7 @@ static const char *machine_name(void)
     }
     return "unknown";
 }
+#endif
 
 static const char *rez_name(short r)
 {
@@ -115,28 +122,64 @@ static const char *rez_name(short r)
     return "extended";
 }
 
+#ifdef PCGEM
+/* ---- PC GEM: DOS, the DPMI host and GEM instead of TOS and cookies ---- */
+#include <dos.h>
+#include <dpmi.h>
+
+static void pc_machine(void)
+{
+    __dpmi_version_ret dv;
+    __dpmi_free_mem_info fm;
+    unsigned short dos = (unsigned short)((_osmajor << 8) | _osminor);
+    add("#Machine");
+    add("Description     : %s", machine_desc[0] ? machine_desc : "(not set - Options menu)");
+    add("Machine type    : PC compatible");
+    add("CPU             : %s (probed)", cpu_name());
+    add("Blitter         : none (PC)");
+    add("#Operating system");
+    add("DOS             : %d.%02d (%s)", dos >> 8, dos & 0xff, _os_flavor);
+    if (__dpmi_get_version(&dv) == 0)
+        add("DPMI            : %d.%02d, %s mode", dv.major, dv.minor,
+            (dv.flags & 1) ? "32-bit" : "16-bit");
+    if (__dpmi_get_free_memory_information(&fm) == 0 && fm.largest_available_free_block_in_bytes != 0xFFFFFFFFUL)
+        add("Largest free    : %lu KB (DPMI)", fm.largest_available_free_block_in_bytes / 1024UL);
+}
+#endif
+
 void sysinfo_short(char *buf, short len)
 {
     char t[120];
+#ifdef PCGEM
+    sprintf(t, "PC %s DOS %d.%02d GEM %x.%02x %dx%d %dc",
+            cpu_name(), _osmajor, _osminor, _AESversion >> 8, _AESversion & 0xff,
+            scr_w, scr_h, ncolors);
+#else
     Supexec(read_sys);          /* low memory: supervisor only */
     sprintf(t, "%s 680%02ld TOS %x.%02x %dx%d %dc blit %s",
             machine_name(), cpu_type, sv_tosver >> 8, sv_tosver & 0xff,
             scr_w, scr_h, ncolors,
             blitter_desc());
+#endif
     strncpy(buf, t, len - 1);
     buf[len - 1] = 0;
 }
 
 void sysinfo_collect(void)
 {
-    long v, st_free, alt_free;
-    unsigned short gd = (unsigned short)Sversion();
     short i, has_agi, rez = Getrez();
     char ids[SYS_W + 2], *e;
+#ifndef PCGEM
+    long v, st_free, alt_free;
+    unsigned short gd = (unsigned short)Sversion();
+#endif
 
     Supexec(read_sys);
     nsys = 0;
 
+#ifdef PCGEM
+    pc_machine();
+#else
     add("#Machine");
     add("Description     : %s", machine_desc[0] ? machine_desc : "(not set - Options menu)");
     add("Machine type    : %s", machine_name());
@@ -194,6 +237,7 @@ void sysinfo_collect(void)
     if (alt_free > 0 && alt_free != st_free)
         add("                  TT/Fast %ld KB", alt_free / 1024L);
 
+#endif
     add("#AES / environment");
     add("AES version     : %x.%02x", _AESversion >> 8, _AESversion & 0xff);
     add("Multitasking    : %s (max apps %d)%s", multitask ? "yes" : "no", _AESnumapps,
@@ -240,7 +284,11 @@ void sysinfo_collect(void)
         work_out[39] == 0 ? "(direct colour)" : "available colours");
     add("Lookup table    : %s", ext_out[5] ? "yes" : "no (true colour)");
     add("Pixel size      : %d x %d microns", work_out[3], work_out[4]);
+#ifdef PCGEM
+    add("Screen memory   : %ld bytes", (long)scr_w * scr_h * planes / 8L);
+#else
     add("Screen memory   : %ld bytes at $%08lx", (long)scr_w * scr_h * planes / 8L, (long)Physbase());
+#endif
     add("VDI handles     : physical %d, ui %d (bench ws opened only for runs)", phys_h, vdi_h);
     add("VDI max vertices: %d", ext_out[14]);
     add("Text rotation   : %s", ext_out[8] == 0 ? "none" : (ext_out[8] == 1 ? "90 degree steps" : "arbitrary"));
@@ -262,6 +310,10 @@ void sysinfo_collect(void)
         add("  %c id %5d  %-32s %s", i == gfont ? '>' : ' ',
             fonts[i].id, fonts[i].name, fonts[i].outline ? "vector" : "");
 
+#ifdef PCGEM
+    (void)ids;
+    return;
+#endif
     add("#Cookie jar");
     ids[0] = 0;
     for (i = 0; i < njar; i++) {

@@ -535,6 +535,14 @@ const char *blitter_desc(void)
 short blit_src;                 /* BS_NONE / BS_XBIOS / BS_XGEM */
 short xgem_present;
 
+#ifdef PCGEM
+static short xg_blitter(short mode, short *present)     /* no XGEM on PC GEM */
+{
+    (void)mode;
+    if (present) *present = 0;
+    return 0;
+}
+#else
 static short xg_blitter(short mode, short *present)
 {
     static short ctrl[5], in[2], out[4];
@@ -548,6 +556,7 @@ static short xg_blitter(short mode, short *present)
     if (present) *present = out[1];
     return out[0];
 }
+#endif
 
 static short blit_get(void)
 {

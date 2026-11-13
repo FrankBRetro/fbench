@@ -25,3 +25,17 @@ if ! make; then
 fi
 git add BUILD release/FBENCH.PRG || exit 1
 echo "pre-commit: release/FBENCH.PRG is Fbench $(cat VERSION).$(cat BUILD)"
+
+# the PC GEM build too, when DJGPP is on the PATH (source the PC-GEM
+# project's scripts/djgppenv.sh first); without it release/FBENCH.APP
+# keeps the version it had
+if command -v i586-pc-msdosdjgpp-gcc >/dev/null 2>&1; then
+    if ! make -C pcgem; then
+        echo "pre-commit: PC GEM build failed - commit stopped" >&2
+        exit 1
+    fi
+    cp pcgem/FBENCH.APP release/FBENCH.APP && git add release/FBENCH.APP || exit 1
+    echo "pre-commit: release/FBENCH.APP is Fbench $(cat VERSION).$(cat BUILD) for PC GEM"
+else
+    echo "pre-commit: no DJGPP compiler - release/FBENCH.APP not rebuilt" >&2
+fi
