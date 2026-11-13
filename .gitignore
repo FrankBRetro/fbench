@@ -10,3 +10,8 @@ FBLAST.LOG
 FBENCH.INF
 # macOS
 .DS_Store
+# release notes and transfer files (not part of the project)
+RELEASE-*.md
+*.bundle
+# release zips (make dist)
+dist/

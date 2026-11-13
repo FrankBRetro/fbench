@@ -1257,9 +1257,34 @@ static void crumb(short i)     { (void)i; }
 void crumb_clear(void)         { }
 #endif
 
+/* Tests that open, top, move or resize windows, or redraw the menu bar.
+   Under MagiC (and MultiTOS) the owner of the top window gets the menu bar
+   and the keyboard, so these pull Fbench to the front: in "Stay in
+   background" mode they run only while Fbench is in front anyway. */
+static short needs_front(short i)
+{
+    static const char *pfx[] = {
+        "AES.OPEN", "AES.MOVE", "AES.SIZE", "AES.TOP", "AES.NAME", "AES.INFO",
+        "AES.SLIDER", "AES.MENU", "ALN.WMOVE", "ALN.WOPEN", "ALN.WSCR", "FULL.", NULL
+    };
+    short k;
+    for (k = 0; pfx[k]; k++)
+        if (!strncmp(tests[i].key, pfx[k], strlen(pfx[k]))) return 1;
+    return 0;
+}
+
+/* Background mode: a test always draws its whole area, covered or not, so
+   the timings stay comparable.  If another program's window covered part
+   of it, ask the AES to repaint that area afterwards: every window there
+   gets a redraw message, as after a dialog. */
+static void repair_area(const GRECT *a)
+{
+    form_dial(FMD_FINISH, 0, 0, 0, 0, a->g_x, a->g_y, a->g_w, a->g_h);
+}
+
 short run_tests(short all)
 {
-    short i, n = 0, done = 0, hide, aes;
+    short i, n = 0, done = 0, hide, aes, front, covered;
     char info[100];
     long sc;
 
@@ -1290,8 +1315,18 @@ short run_tests(short all)
             continue;
         }
 
-        wind_set(wins[WN_TEST].h, WF_TOP, 0, 0, 0, 0);
-        drain_events();
+        if (!polite) {
+            wind_set(wins[WN_TEST].h, WF_TOP, 0, 0, 0, 0);
+            drain_events();
+        } else {
+            drain_events();
+            if (needs_front(i) && !fb_in_front()) {
+                res[i].state = RS_NA;
+                strcpy(res[i].note, "skipped: Fbench in background");
+                continue;
+            }
+        }
+        covered = polite && !win_fully_visible(wins[WN_TEST].h);
         wind_get_grect(wins[WN_TEST].h, WF_WORKXYWH, &tw_area);
         run_tw_w = tw_area.g_w; run_tw_h = tw_area.g_h;
 
@@ -1319,6 +1354,10 @@ short run_tests(short all)
         area_done();
         if (hide) graf_mouse(M_ON, NULL);
         if (!aes) fb_update(0);
+        /* also catches a window that came over the test window during an
+           AES-group test (those don't hold the screen lock throughout) */
+        if (covered || (polite && !win_fully_visible(wins[WN_TEST].h)))
+            repair_area(&tw_area);
 
         res[i].blit = blitter_on;
         strcpy(res[i].note, cur_note);
@@ -1328,10 +1367,12 @@ short run_tests(short all)
     }
     cur_run = -1;
     busy_mouse(0);
+    front = fb_in_front();
     testwin_close();
     bench_close();
     crumb_clear();
     results_show();
+    if (polite && !front) results_to_back();   /* don't jump in front of the user */
     busy = 0;
     drain_events();
     results_changed();

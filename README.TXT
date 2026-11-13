@@ -43,6 +43,7 @@ MENUS  (short titles are used in ST Low)
             Blitter enabled (^B) - switches blitter use (see BLITTER below),
             test duration 0.5 / 1 / 3 s, Next GDOS font (^F),
             Mouse visible in tests - see below
+            Stay in background - see below
   Window    Results, System info (^I)
 
 RESULTS WINDOW
@@ -142,6 +143,28 @@ PDF REPORTS
     calls   AES / event / query calls (not adjusted)
   Profiles now record PLANES, COLOURS, DESK and TESTWIN for this. Older
   profiles still load; their sizes are estimated (marked * in the PDF).
+
+STAY IN BACKGROUND  (Options menu; on by default under MagiC and MultiTOS)
+  Lets you keep working in other programs while Fbench runs. Under MagiC
+  (Atari, MagiC Mac, MagiC PC, MagiCOnLinux) the program that owns the
+  top window gets the menu bar and the keyboard, so Fbench must not top
+  its windows. With this option on:
+    * Fbench never brings its windows to the front by itself.
+    * The run carries on when other windows cover the test window. Each
+      test still draws its whole area, so the timings stay the same as
+      when it is visible; anything covering that area shows Fbench's
+      drawing until the test ends (0.5 - 3 s), then Fbench asks the AES
+      to repaint it (form_dial FMD_FINISH) and those programs redraw.
+    * Tests that have to open, top, move or resize windows, or redraw the
+      menu bar (AES window tests, alignment window tests, full-screen
+      tests), run only while Fbench is the program in front. Otherwise
+      they are skipped and shown as n/a with "skipped: Fbench in
+      background".
+    * At the end of a run the results window reopens behind the program
+      you are using (where the AES supports WF_BOTTOM).
+  Turn it off for an unattended run that should always complete every
+  test. Single-tasking TOS works as before (the option is off there).
+  MagiC is recognised by its MagX cookie and counts as multitasking.
 
 MOUSE VISIBLE IN TESTS  (Options menu; on by default under MultiTOS)
   The pointer is never hidden during a run, so you can keep using other

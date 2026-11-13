@@ -127,6 +127,12 @@ void  pens_update(void);        /* present but XBIOS 64 can't switch it (TOS 4.x
 const char *blitter_desc(void);    /* "none" / "on" / "off" / "on (fixed)" */
 extern long  dur_ticks;
 extern short multitask;
+extern short magic_present;     /* MagiC (MagX cookie): Atari, Mac, PC, Linux */
+extern short polite;            /* Options > Stay in background            */
+short get_cookie(long id, long *val);
+short fb_in_front(void);        /* is the top window one of Fbench's?      */
+short win_fully_visible(short h);
+void  results_to_back(void);
 extern char  machine_desc[34];   /* user's description, "" = not set   */
 
 /* non-modal progress window (fbench.c) */

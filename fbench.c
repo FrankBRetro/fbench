@@ -21,6 +21,7 @@ short blitter_present, blitter_on, blitter_fixed;
 long  dur_ticks = 200;              /* 1 s per test (200 Hz ticks) */
 short multitask;
 short cur_run = -1;
+short magic_present, polite;
 short mouse_vis;                    /* option: pointer stays visible   */
 static short cur_form = ARROW;
 short ping_seen;
@@ -48,7 +49,7 @@ enum {
     C_SAVEPROF, C_EXPORT, C_PDFREP, C_BLITREP, C_CMPPROF, C_QUIT,
     C_RUNALL, C_RUNSEL, C_SELALL, C_SELNONE, C_SELVDI, C_SELAES, C_SELALIGN, C_SELFULL, C_SELGDOS,
     C_LOADBASE, C_CLEARBASE, C_BASE0, C_BASE1, C_BASE2, C_BASE3,
-    C_BLITTER, C_DSHORT, C_DNORM, C_DLONG, C_NEXTFONT, C_MOUSEVIS, C_TRACE, C_DESC,
+    C_BLITTER, C_DSHORT, C_DNORM, C_DLONG, C_NEXTFONT, C_MOUSEVIS, C_POLITE, C_TRACE, C_DESC,
     C_WRESULTS, C_WINFO,
     C_MAX
 };
@@ -100,6 +101,7 @@ static const MITEM m_opts[] = {
     { C_DLONG,    "  Duration: 3 s" }, SEP,
     { C_NEXTFONT, "  Next GDOS font    ^F" }, SEP,
     { C_MOUSEVIS, "  Mouse visible in tests" },
+    { C_POLITE,   "  Stay in background" },
 #if FB_DEBUG
     { C_TRACE,    "  Trace test steps (debug)" },
 #endif
@@ -233,6 +235,8 @@ static void update_menu(void)
     m_check(C_DLONG,  dur_ticks == 600);
     m_enable(C_NEXTFONT, nfonts > 1);
     m_check(C_MOUSEVIS, mouse_vis);
+    m_check(C_POLITE, polite);
+    m_enable(C_POLITE, !busy);
     m_check(C_TRACE, trace_steps);
     for (i = 0; i < MAX_BASE; i++) {
         short o = cmdobj[C_BASE0 + i];
@@ -827,6 +831,43 @@ void results_show(void)
     open_at = NULL;
 }
 
+/* After a run in the background: put the reopened results window behind
+   the program the user is working in, where the AES knows WF_BOTTOM
+   (AES 4.1, MagiC 3+: appl_getinfo(AES_WINDOW) bit 6). */
+void results_to_back(void)
+{
+    short a1 = 0, a2, a3, a4;
+    WIN *w = &wins[WN_RESULTS];
+    if (w->h <= 0) return;
+    if ((_AESversion >= 0x0400 || appl_find("?AGI") >= 0) &&
+        appl_getinfo(11, &a1, &a2, &a3, &a4) && (a1 & 0x40))
+        wind_set(w->h, 25 /* WF_BOTTOM */, 0, 0, 0, 0);
+}
+
+/* Is the top window ours, i.e. is Fbench the program in front? */
+short fb_in_front(void)
+{
+    short top = 0, d;
+    wind_get(0, WF_TOP, &top, &d, &d, &d);
+    return win_find(top) != NULL;
+}
+
+/* Is the whole work area of window h visible (one rectangle, unclipped
+   except by the screen)?  Fbench's VDI tests draw straight into the work
+   area, so they may only run when nothing covers it. */
+short win_fully_visible(short h)
+{
+    GRECT work, r;
+    if (h <= 0) return 0;
+    wind_get_grect(h, WF_WORKXYWH, &work);
+    if (!rc_intersect(&desk, &work)) return 0;
+    wind_get_grect(h, WF_FIRSTXYWH, &r);
+    if (r.g_x != work.g_x || r.g_y != work.g_y || r.g_w != work.g_w || r.g_h != work.g_h)
+        return 0;
+    wind_get_grect(h, WF_NEXTXYWH, &r);
+    return r.g_w == 0 || r.g_h == 0;
+}
+
 void results_changed(void)
 {
     WIN *w = &wins[WN_RESULTS];
@@ -1364,6 +1405,10 @@ static void do_cmd(short cmd)
             form_alert(1, "[1][Trace test steps:|Each step of a test's first|16 operations is written to|FBLAST.LOG and the screen.|Scores will be lower.][ OK ]");
         update_menu();
         break;
+    case C_POLITE:
+        polite = !polite;
+        update_menu();
+        break;
     case C_MOUSEVIS:
         mouse_vis = !mouse_vis;
         update_menu();
@@ -1422,7 +1467,10 @@ static void handle_message(short *msg)
         break;
     case WM_TOPPED:
     case WM_NEWTOP:
-        if (w && (!busy || w == &wins[WN_PROG])) wind_set(w->h, WF_TOP, 0, 0, 0, 0);
+        /* during a run the user may bring the test window forward (that is
+           how a paused run continues) but nothing else of ours moves */
+        if (w && (!busy || w == &wins[WN_PROG] || w == &wins[WN_TEST]))
+            wind_set(w->h, WF_TOP, 0, 0, 0, 0);
         break;
     case WM_CLOSED:
         if (!w) break;
@@ -1604,8 +1652,12 @@ int main(void)
 
     app_id = appl_init();
     if (app_id < 0) return 1;
-    multitask = (_AESnumapps != 1);
-    mouse_vis = multitask;              /* default on under MultiTOS */
+    /* MagiC (any flavour: Atari, MagiC Mac, MagiC PC, MagiCOnLinux) sets the
+       MagX cookie; it multitasks whatever global[1] says */
+    magic_present = get_cookie(0x4D616758L, NULL);              /* 'MagX' */
+    multitask = (_AESnumapps != 1) || magic_present;
+    mouse_vis = multitask;              /* default on when multitasking */
+    polite = multitask;                 /* never top windows when others run */
 
     phys_h = graf_handle(&char_w, &char_h, &box_w, &box_h);
     vdi_h = open_vwk(work_out);

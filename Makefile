@@ -3,7 +3,10 @@
 #
 #   make          release build -> release/FBENCH.PRG (no logging)
 #   make debug    debug build   -> FBENCHD.PRG, with the FBLAST.LOG crash
-#                 breadcrumbs and Options > Trace test steps; not released
+#                 breadcrumbs and Options > Trace test steps
+#   make dist     zips for a GitHub release, in dist/:
+#                 fbench-<version>.zip        FBENCH.PRG + README.TXT + LICENSE
+#                 fbench-<version>-debug.zip  FBENCHD.PRG + README.TXT + LICENSE
 #
 # Version = VERSION file + BUILD counter: 1.1.<BUILD>.  BUILD goes up by one
 # with every git commit: the pre-commit hook (tools/hooks/pre-commit) runs
@@ -57,8 +60,17 @@ obj-debug/%.o: %.c fbench.h pdf.h
 	@mkdir -p obj-debug
 	$(CC) $(CFLAGS) -DFB_DEBUG=1 -c $< -o $@
 
+# release zips (run after the commit, so the version matches the binary)
+VER = $(shell cat VERSION).$(shell cat BUILD)
+dist: $(RELEASE) $(DEBUG)
+	@mkdir -p dist
+	rm -f dist/fbench-$(VER).zip dist/fbench-$(VER)-debug.zip
+	zip -j -X dist/fbench-$(VER).zip $(RELEASE) README.TXT LICENSE
+	zip -j -X dist/fbench-$(VER)-debug.zip $(DEBUG) README.TXT LICENSE
+	@echo "dist/fbench-$(VER).zip and dist/fbench-$(VER)-debug.zip ready"
+
 # leaves release/ alone: released binaries are kept
 clean:
 	rm -rf obj obj-debug $(DEBUG) *.o fbench.prg
 
-.PHONY: all debug bump clean
+.PHONY: all debug bump dist clean

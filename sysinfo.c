@@ -54,6 +54,13 @@ static short cookie(long id, long *val)
 
 #define CK(a,b,c,d) (((long)(a) << 24) | ((long)(b) << 16) | ((long)(c) << 8) | (long)(d))
 
+/* for other modules: read the cookie jar (supervisor) and look one up */
+short get_cookie(long id, long *val)
+{
+    Supexec(read_sys);
+    return cookie(id, val);
+}
+
 static void add(const char *fmt, ...)
 {
     va_list ap;
@@ -172,7 +179,11 @@ void sysinfo_collect(void)
         add("MiNT            : %ld.%ld  (pid %ld)", (v >> 8) & 0xff, v & 0xff, (long)Pgetpid());
     else
         add("MiNT            : not running");
-    if (cookie(CK('M','a','g','X'), &v)) add("MagiC           : present");
+    if (cookie(CK('M','a','g','X'), &v)) {
+        const char *var = cookie(CK('M','g','M','c'), NULL) ? " (MagiC Mac)" :
+                          cookie(CK('M','g','P','C'), NULL) ? " (MagiC PC)" : "";
+        add("MagiC           : present%s", var);
+    }
     if (nvdi_ver) add("NVDI            : %x.%02x", nvdi_ver >> 8, nvdi_ver & 0xff);
 
     st_free = (long)Malloc(-1L);
@@ -185,7 +196,9 @@ void sysinfo_collect(void)
 
     add("#AES / environment");
     add("AES version     : %x.%02x", _AESversion >> 8, _AESversion & 0xff);
-    add("Multitasking    : %s (max apps %d)", multitask ? "yes" : "no", _AESnumapps);
+    add("Multitasking    : %s (max apps %d)%s", multitask ? "yes" : "no", _AESnumapps,
+        magic_present ? ", MagiC" : "");
+    add("Stay in backgr. : %s", polite ? "yes - windows are never topped" : "no");
     if (xgem_present) {
         static const char *th[] = { "TOS 4", "TOS 2", "MagiC", "AmigaOS 1.3", "AmigaOS 2.0" };
         short a1 = -1, a2, a3, a4;
