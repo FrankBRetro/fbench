@@ -242,7 +242,7 @@ static void update_menu(void)
         short o = cmdobj[C_BASE0 + i];
         short w = mtree[o].ob_width / char_w;
         char *s = mtree[o].ob_spec.free_string;
-        if (base[i].used) sprintf(buf, "  %c: %s", 'A' + i, base[i].name);
+        if (base[i].used) sprintf(buf, "  %c: %.30s", 'A' + i, base[i].name);   /* buf[40] */
         else              strcpy(buf, "  (empty)");
         if ((short)strlen(buf) > w) buf[w] = 0;
         memset(s, ' ', w); memcpy(s, buf, strlen(buf)); s[w] = 0;
@@ -373,7 +373,7 @@ static void draw_result_row(short r, short x, short y, short w, short lh, const 
         if (base[active_base].used)
             txt(x + L->cpct * char_w, ty, " % ", 5, 1, 1);
         if (L->cols - L->cbar > 4) {
-            if (base[active_base].used) sprintf(buf, "vs %c: %s", 'A' + active_base, base[active_base].name);
+            if (base[active_base].used) sprintf(buf, "vs %c: %.50s", 'A' + active_base, base[active_base].name);
             else                        strcpy(buf, "relative (no baseline)");
             txt(x + L->cbar * char_w, ty, buf, L->cols - L->cbar, 1, 0);
         }
@@ -423,14 +423,25 @@ static void draw_result_row(short r, short x, short y, short w, short lh, const 
             short bh2 = lh - 4;
             if (bv > 0) {
                 long pct = rs->score * 100L / bv;
-                sprintf(buf, "%4ld%%", pct);
+                if (pct >= 10000) sprintf(buf, "%4ldx", pct / 100);   /* 5 columns */
+                else              sprintf(buf, "%4ld%%", pct);
                 txt(x + L->cpct * char_w, ty, buf, 5, PEN_OR_FG(pct >= 100 ? pen.good : pen.bad), pct >= 100 ? 1 : 0);
                 if (bw > 8) {
-                    long lp = pct > 200 ? 200 : pct;
-                    bar(bx0, y + 2, (short)(lp * bw / 200), bh2, pct >= 100 ? 1 : 2);
-                    p[0] = bx0 + bw / 2; p[1] = y + 1; p[2] = p[0]; p[3] = y + lh - 2;
+                    /* two-colour bar: the baseline's share on the left, this
+                       machine's on the right, split where they meet - past the
+                       middle mark = this one is faster. Either share keeps at
+                       least one pixel, so a machine far too slow to compare
+                       still shows. */
+                    short sb = (short)(100L * bw / (100L + pct));
+                    if (sb < 1) sb = 1;
+                    if (sb > bw - 1) sb = bw - 1;
+                    bar(bx0, y + 2, sb, bh2, 0);
+                    bar(bx0 + sb, y + 2, bw - sb, bh2, pct >= 100 ? 1 : 2);
                     vsl_color(vdi_h, 1);
-                    v_pline(vdi_h, 2, p);   /* 100% mark */
+                    p[0] = bx0 + sb; p[1] = y + 1; p[2] = p[0]; p[3] = y + lh - 2;
+                    v_pline(vdi_h, 2, p);   /* where they meet */
+                    p[0] = p[2] = bx0 + bw / 2; p[1] = y + lh - 2; p[3] = y + lh / 2 + 1;
+                    v_pline(vdi_h, 2, p);   /* the middle: equal speed (half height) */
                 }
             } else if (bw > 8) {
                 long m = group_max(tests[code].group);
@@ -1293,7 +1304,7 @@ static void compare_profiles(void)
     else if (total > n)
         sprintf(msg, "[1][Fbench: compared the first|%d of %d profiles (by name).|COMPARE.PDF written to|%s][ OK ]", n, total, shown);
     else
-        sprintf(msg, "[1][Fbench: compared %d profiles.|COMPARE.PDF written to|%s][ OK ]", n, shown);
+        sprintf(msg, "[1][Fbench: compared %d profiles|with the built-in STE (A).|COMPARE.PDF written to|%s][ OK ]", n, shown);
     form_alert(1, msg);
 }
 
@@ -1708,6 +1719,7 @@ int main(void)
     load_inf();
     fonts_init();
     tests_init();
+    baseline_builtin();
     sysinfo_collect();
     build_rows();
     graf_mouse(ARROW, NULL);

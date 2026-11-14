@@ -26,7 +26,7 @@ ifdef DEBUG
 CFLAGS  += -DFB_DEBUG=1
 endif
 
-SRCS    = fbench tests sysinfo report pdf pdfrep cpu
+SRCS    = fbench tests sysinfo report pdf pdfrep cpu refbase
 LAYER   = pgrsc pgtos pglinear          # the PC GEM layer, our headers
 KITPORT = pgaes pgvdi                   # the PC GEM layer, the kit's headers
 

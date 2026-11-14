@@ -48,7 +48,7 @@ extern const char fb_version[];
 #define FB_DEBUG 0
 #endif
 
-#define MAX_TESTS   128
+#define MAX_TESTS   160
 #define MAX_BASE    4
 #define MAX_FONTS   64
 #define MAX_SYS     96          /* lines in the system report */
@@ -79,11 +79,20 @@ typedef struct {
     char  note[28];
 } RESULT;
 
+/* what one test operation's work depends on, for normalised results */
+typedef struct {
+    short planes;               /* colour bit planes                    */
+    short tw, th;               /* test window work area                */
+    short dw, dh;               /* desktop work area (full-screen tests) */
+    short est;                  /* 1 = estimated from the screen mode    */
+} GEOM;
+
 typedef struct {
     short used;
     char  name[48];             /* NAME= line, or file name             */
     char  file[16];
     long  val[MAX_TESTS];       /* x10, -1 = not in profile             */
+    GEOM  geo;                  /* that machine's geometry              */
 } BASELINE;
 
 typedef struct {
@@ -168,6 +177,18 @@ extern BASELINE base[MAX_BASE];
 extern short active_base;
 
 short baseline_load(const char *path);
+void  baseline_builtin(void);        /* the built-in reference, slot A */
+
+/* built-in reference profile (refbase.c, made from baseline/STE16BLT.FBP) */
+extern const char ref_fbp[], ref_file[];
+#define REF_PATH  "*builtin*"        /* path that opens ref_fbp       */
+#define REF_TAG   " [built-in]"
+
+/* profile line reader: a file, or the built-in text for REF_PATH */
+typedef struct { FILE *f; const char *s; } LSRC;
+short lsrc_open(LSRC *l, const char *path);
+char *lsrc_gets(char *buf, short n, LSRC *l);
+void  lsrc_close(LSRC *l);
 void  baseline_from_results(short slot, const char *name, const RESULT *r);
 void  baseline_clear(void);
 short profile_save(const char *path);
@@ -187,6 +208,18 @@ const char *cpu_name(void);      /* "68030", "486" ... */
 /* ---- PDF reports (pdfrep.c) ---- */
 short blit_report(const char *path, const RESULT *off, const RESULT *on);
 short machine_report(const char *path);
+/* plain-language summary against a baseline: "VDI primitives: 280x faster"
+   - fills up to max lines of CONC_W chars, returns the count */
+#define CONC_W 160              /* longest line ~110 */
+short conclusion_lines(const BASELINE *b, char (*lines)[CONC_W], short max);
+
+/* normalised results (pdfrep.c): ops/s x the work one operation does on
+   that machine (planes, test window, desktop), as % of a baseline */
+short norm_class(const char *key);
+const char *norm_label(short nc);
+void  geom_estimate(GEOM *g, short sw, short sh, short colours);
+void  this_geom(GEOM *g);
+long  norm_pct(short i, long score, const BASELINE *b);   /* -1 = n/a */
 short profiles_report(const char *dir, const char *path, short *nfound, short *ntotal);
 
 /* ---- UI helpers (fbench.c) ---- */

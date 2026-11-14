@@ -28,7 +28,7 @@ MENUS  (short titles are used in ST Low)
             Export report... (^E) - human readable *.TXT report
             Results report (PDF)... - this machine's results and full
               configuration; no baseline needed (if one is loaded, its
-              figures and % are included too)
+              figures, raw % and normalised % are included too)
             Blitter report (PDF)... - runs the selected tests with the
               blitter off, then on, and writes a PDF comparison
             Compare folder (PDF)... - open a folder in the file
@@ -37,8 +37,10 @@ MENUS  (short titles are used in ST Low)
             Quit (^Q)
   Tests     Run all (^A), Run selected (^R), Select all / none / VDI /
             AES / alignment / full-screen / GDOS
-  Baseline  Load baseline... (^O) - up to 4 profiles from other machines;
-            pick the active one (shown as % and bars), Clear baselines
+  Baseline  A: the built-in reference (see BUILT-IN BASELINE)
+            Load baseline... (^O) - up to 3 more profiles from other
+            machines; pick the active one (shown as % and bars)
+            Clear baselines - removes the loaded ones, keeps A
   Options   Machine description... - free text naming this setup, e.g.
               "FireBee", "MultiTOS", "XGEM"; saved in FBENCH.INF
             Blitter enabled (^B) - switches blitter use (see BLITTER below),
@@ -50,15 +52,33 @@ MENUS  (short titles are used in ST Low)
 RESULTS WINDOW
   Click a check box to include/exclude a test, click a group bar to
   toggle the whole group. Values are operations per second. With a
-  baseline loaded: % of baseline and a green (faster) / red (slower)
-  bar with a 100% mark. Without one: bars relative to the group's best.
+  baseline loaded: % of baseline (shown as e.g. "280x" from 10000% up)
+  and a two-colour bar: the baseline's share on the left (patterned),
+  this machine's on the right (green = faster, red = slower), with a
+  line where they meet and a short mark in the middle (equal speed).
+  Either share keeps at least one pixel, so a much slower machine still
+  shows. Without a baseline: bars relative to the group's best.
   The results window closes while tests run and reopens in the same
   place afterwards. Esc or closing the test window stops a run.
 
 TEST GROUPS
   VDI primitives        lines, fills, shapes, text, blits, raster ops
   AES windows & events  window create/open/move/size/top, sliders,
-                        scrolling, objc_draw, menu bar, events, messages
+                        scrolling (plain, and in a window with arrows and
+                        a slider that follows the scroll), objc_draw,
+                        menu bar, events, messages;
+                        whole dialogs drawn with objc_draw: medium (~18
+                        objects), complex (~42), very complex (~76,
+                        nested 4 deep: lists, slider, toolbar, image,
+                        tabs, swatches, every object state) and
+                        pathological (~140: three full-size layers drawn
+                        over each other, boxes nested 6 deep (the most
+                        TOS objc_draw can walk safely), every state
+                        on one object, 3 px borders, images off the grid,
+                        overlaps, transparent fills). The note
+                        gives the object count; in a small test window
+                        the rows are packed closer, and anything that
+                        still doesn't fit is left out
   Alignment (blitter)   each test twice: on the 16 pixel (word) grid, and
                         deliberately off it (x+3 / +5 / +11, 3 px scrolls,
                         windows whose work area starts off-grid). Run the
@@ -67,6 +87,14 @@ TEST GROUPS
                         as a baseline to see the difference.
                         The note column reports the window alignment the
                         AES actually gave ("work x mod 16 = n").
+                        The dialogs are drawn here too, on the 16 pixel
+                        grid and at grid + 3.
+                        Window scrolling right, left, diagonally down-right
+                        and up-left, each in a window without scroll bars
+                        and in one with both sliders (moved every step),
+                        with the work area on the grid scrolling 16 px, and
+                        off it (grid + 5) scrolling 3 px. "Right" means the
+                        view moves right, as with the window's right arrow.
   Full-screen windows   a window covering the whole desktop: open/close,
                         full<->normal, topping, fill, scroll up a line,
                         scroll left 16 / 8 / 3 px, scroll text at 8-48pt
@@ -100,6 +128,18 @@ CPU
   (e.g. a 68040 board reported as 68020). If the cookie disagrees,
   System info says so. Profiles record CPU=.
 
+BUILT-IN BASELINE
+  Fbench carries one reference profile inside the program, made on an
+  STE with TOS 1.6, the blitter on and XGDOS, in medium resolution
+  (640x200, 4 colours), run in cycle-exact Hatari: "STE TOS 1.6 blitter
+  XGDOS (Hatari) [built-in]". It is always baseline A and the active one
+  when Fbench starts, so the results window, Export report and Results
+  report show every machine against the same STE out of the box (raw %
+  and normalised %). Compare folder always puts it first as machine A
+  (=100%); a copy of STE16BLT.FBP in the folder is skipped.
+  The source is baseline/STE16BLT.FBP; the Makefile turns it into
+  refbase.c (tools/mkref.sh) when it changes.
+
 PROFILES (*.FBP)
   Plain text, KEY=value (ops/s). Run Fbench on each machine, save a
   profile, copy the .FBP files around and load them as baselines.
@@ -114,6 +154,13 @@ PROGRESS AND REDRAWS
   closes, Fbench redraws the area it covered before starting any work.
 
 PDF REPORTS
+  With a baseline loaded, the Results report and Export report end with
+  a conclusion in plain words: each group as "280x faster" / "35% faster"
+  / "about the same speed" / "2.5x slower" than the baseline, raw and
+  normalised, the overall figure, and the tests furthest ahead and
+  behind. Group figures are the mean of the per-test percentages, as in
+  the Groups summary.
+
   Written by Fbench itself (no libraries, no FPU); they use the standard
   PDF fonts (Helvetica, Courier) so open in any PDF viewer.
 
@@ -125,11 +172,11 @@ PDF REPORTS
   Takes twice as long as a normal run; Esc cancels.
 
   Compare folder: open the folder in the file selector and press OK (the
-  file name can stay empty). Every *.FBP in it is loaded (up to 32, by
+  file name can stay empty). Every *.FBP in it is loaded (up to 31, by
   file name) and COMPARE.PDF is written into the same folder, replacing
-  any earlier one. The first one is the
-  reference machine A (=100%) - name files 01xxx.FBP, 02xxx.FBP... to
-  pick the order. The PDF contains:
+  any earlier one. Machine A (=100%) is always the built-in STE
+  baseline; the folder's profiles follow as B, C... by file name - name
+  files 01xxx.FBP, 02xxx.FBP... to pick the order. The PDF contains:
     - the machine list (screen, planes, test window, desktop, blitter)
     - summary charts per group: raw % of A, and normalised % of A
     - raw ops/s, raw % of A, and normalised % of A for every test,
@@ -142,6 +189,9 @@ PDF REPORTS
     area    whole-window work         (w x h x planes of the test window)
     desk    full-screen windows       (desktop w x h x planes)
     calls   AES / event / query calls (not adjusted)
+  The same normalisation is in the Results report (PDF) and the text
+  Export report whenever a baseline is loaded: a Norm % column next to the
+  raw %, and normalised group averages.
   Profiles now record PLANES, COLOURS, DESK and TESTWIN for this. Older
   profiles still load; their sizes are estimated (marked * in the PDF).
 
@@ -159,8 +209,7 @@ STAY IN BACKGROUND  (Options menu; on by default under MagiC and MultiTOS)
     * Tests that have to open, top, move or resize windows, or redraw the
       menu bar (AES window tests, alignment window tests, full-screen
       tests), run only while Fbench is the program in front. Otherwise
-      they are skipped and shown as n/a with "skipped: Fbench in
-      background".
+      they are skipped and shown as n/a with "skipped: in background".
     * At the end of a run the results window reopens behind the program
       you are using (where the AES supports WF_BOTTOM).
   Turn it off for an unattended run that should always complete every

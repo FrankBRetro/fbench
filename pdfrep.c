@@ -115,7 +115,14 @@ static const short pal[8][3] = {
 };
 #define PC(i) pal[(i) & 7][0], pal[(i) & 7][1], pal[(i) & 7][2]
 
-static void fmt_pct(char *o, long pct) { if (pct < 0) strcpy(o, "-"); else sprintf(o, "%ld%%", pct); }
+/* "87%", "4250%"; from 10000% up as a multiple ("280x") so the columns
+   stay narrow when an emulator or a fast machine meets a slow baseline */
+static void fmt_pct(char *o, long pct)
+{
+    if (pct < 0)            strcpy(o, "-");
+    else if (pct >= 10000L) sprintf(o, "%ldx", pct / 100);
+    else                    sprintf(o, "%ld%%", pct);
+}
 
 /* horizontal bar with value label; 'scale' = value at full width */
 static void hbar(REP *r, short x, short w, long v, long scale, short h, short cr, short cg, short cb)
@@ -126,6 +133,22 @@ static void hbar(REP *r, short x, short w, long v, long scale, short h, short cr
     if (bw > w) bw = w;
     if (v > 0 && bw < 1) bw = 1;
     pdf_rect(r->p, x, r->y - h + 2, bw, h, cr, cg, cb);
+}
+
+/* two-colour bar: the baseline's share (left) against this machine's
+   (right), split where they meet - past the middle = this one is faster.
+   pct = this machine as % of the baseline */
+static void split_bar(REP *r, short x, short y, short w, short h, long pct,
+                      short br, short bg, short bb, short tr, short tg, short tb)
+{
+    short bw;
+    if (pct < 0) return;
+    bw = (short)(100L * w / (100L + pct));
+    if (bw < 1) bw = 1;
+    if (bw > w - 1) bw = w - 1;
+    pdf_rect(r->p, x, y, bw, h, br, bg, bb);
+    pdf_rect(r->p, x + bw, y, w - bw, h, tr, tg, tb);
+    pdf_line(r->p, x + bw, y, x + bw, y + h, 1, 20, 20, 20);
 }
 
 /* ================================================================== */
@@ -322,6 +345,83 @@ short blit_report(const char *path, const RESULT *off, const RESULT *on)
 /*  1b. This machine: results + configuration (no baseline needed)    */
 /* ================================================================== */
 
+/* "280x faster", "35% faster", "about the same speed", "2.5x slower" */
+static void speed_words(char *o, long pct)
+{
+    if (pct >= 1000)     sprintf(o, "%ldx faster", pct / 100);
+    else if (pct >= 200) sprintf(o, "%ld.%ldx faster", pct / 100, (pct % 100) / 10);
+    else if (pct >= 105) sprintf(o, "%ld%% faster", pct - 100);
+    else if (pct > 95)   strcpy(o, "about the same speed");
+    else if (pct <= 0)   strcpy(o, "too slow to measure against it");
+    else {
+        long x = 10000L / pct;                      /* slower: how many times */
+        if (x >= 1000)     sprintf(o, "%ldx slower", x / 100);
+        else if (x >= 200) sprintf(o, "%ld.%ldx slower", x / 100, (x % 100) / 10);
+        else               sprintf(o, "%ld%% slower", 100 - pct);
+    }
+}
+
+/* The same averages as the group summary (mean of the per-test %), then
+   the overall figure and the tests furthest ahead and behind. */
+short conclusion_lines(const BASELINE *b, char (*lines)[CONC_W], short max)
+{
+    short g, i, n = 0, tcnt = 0, tn = 0, best = -1, worst = -1;
+    long  tsum = 0, tnsum = 0, bestp = 0, worstp = 0;
+    char  w1[40], w2[40];
+
+    if (!b || !b->used || max < 4) return 0;
+    for (g = 0; g < NGROUPS && n < max - 3; g++) {
+        long sum = 0, nsum = 0;
+        short cnt = 0, ncnt = 0;
+        for (i = 0; i < ntests; i++) {
+            long bv = b->val[i], pct, np;
+            if (tests[i].group != g || res[i].state != RS_OK || bv <= 0) continue;
+            pct = res[i].score * 100L / bv;
+            np = norm_pct(i, res[i].score, b);
+            sum += pct; cnt++;
+            if (np >= 0) { nsum += np; ncnt++; }
+            if (best < 0 || pct > bestp)   { best = i; bestp = pct; }
+            if (worst < 0 || pct < worstp) { worst = i; worstp = pct; }
+        }
+        if (!cnt) continue;
+        tsum += sum; tcnt += cnt; tnsum += nsum; tn += ncnt;
+        speed_words(w1, sum / cnt);
+        if (ncnt) {
+            speed_words(w2, nsum / ncnt);
+            sprintf(lines[n++], "%s: %s (normalised: %s), %d tests", group_name[g], w1, w2, cnt);
+        } else
+            sprintf(lines[n++], "%s: %s, %d tests", group_name[g], w1, cnt);
+    }
+    if (!tcnt) return 0;
+    speed_words(w1, tsum / tcnt);
+    if (tn) {
+        speed_words(w2, tnsum / tn);
+        sprintf(lines[n++], "Overall: %s (normalised: %s), %d tests", w1, w2, tcnt);
+    } else
+        sprintf(lines[n++], "Overall: %s, %d tests", w1, tcnt);
+    if (best >= 0) {
+        speed_words(w1, bestp);
+        sprintf(lines[n++], "%s: %s, %s", bestp >= 100 ? "Furthest ahead" : "Least behind",
+                tests[best].name, w1);
+    }
+    if (worst >= 0 && worst != best) {
+        speed_words(w1, worstp);
+        sprintf(lines[n++], "%s: %s, %s", worstp >= 100 ? "Least ahead" : "Furthest behind",
+                tests[worst].name, w1);
+    }
+    return n;
+}
+
+/* table columns with a baseline: numbers, then the split bars */
+#define BX_OPS   205
+#define BX_BASE  250
+#define BX_RAW   285
+#define BX_NORM  322
+#define BX_BAR   330
+#define BX_BARW  108
+#define BX_SCL   443
+#define BX_NOTE  468
+
 short machine_report(const char *path)
 {
     REP R, *r = &R;
@@ -352,22 +452,41 @@ short machine_report(const char *path)
             b ? "; % compares with the loaded baseline." : ". Bars compare tests within each group.");
     para(r, t, 9);
     if (b) {
+        GEOM me;
         sprintf(t, "Baseline %c: %s  [%s]", 'A' + active_base, b->name, b->file);
         para(r, t, 9);
+        this_geom(&me);
+        /* two shorter paragraphs: the whole sentence could exceed t[] */
+        para(r, "Norm % allows for the work one operation does on each machine - colour planes, "
+                "test window size, and desktop size for full-screen tests - so different screen "
+                "modes compare fairly.", 8);
+        sprintf(t, "This machine: planes %d, test window %dx%d, desktop %dx%d%s. "
+                   "Baseline: planes %d, test window %dx%d, desktop %dx%d%s.",
+                me.planes, me.tw, me.th, me.dw, me.dh, me.est ? " (estimated)" : "",
+                b->geo.planes, b->geo.tw, b->geo.th, b->geo.dw, b->geo.dh,
+                b->geo.est ? " (estimated: older profile)" : "");
+        para(r, t, 8);
+        para(r, "In the tables, each test has two two-colour bars: the baseline's share in blue "
+                "and this machine's in orange, raw on top and normalised below (paler). The black "
+                "mark is where they meet: right of the middle, this machine is faster.", 8);
     }
 
     /* per-group summary */
     subheading(r, "Groups");
     for (g = 0; g < NGROUPS; g++) {
-        short n = 0, nb = 0;
-        long sum = 0;
+        short n = 0, nb = 0, nn = 0;
+        long sum = 0, nsum = 0;
         for (i = 0; i < ntests; i++) {
             if (tests[i].group != g || res[i].state != RS_OK) continue;
             n++;
             bv = b ? b->val[i] : -1;
-            if (bv > 0) { sum += res[i].score * 100L / bv; nb++; }
+            if (bv > 0) {
+                long np = norm_pct(i, res[i].score, b);
+                sum += res[i].score * 100L / bv; nb++;
+                if (np >= 0) { nsum += np; nn++; }
+            }
         }
-        need(r, 16);
+        need(r, 30);
         pdf_text(r->p, LM, r->y, PF_HELV, 10, group_name[g], 30, 30, 30);
         sprintf(t, "%d test%s run", n, n == 1 ? "" : "s");
         pdf_text(r->p, 190, r->y, PF_HELV, 9, n ? t : "not run", n ? 60 : 150, n ? 60 : 150, n ? 60 : 150);
@@ -378,7 +497,21 @@ short machine_report(const char *path)
             else if (avg <= 95) hbar(r, 280, 200, avg, 200, 11, 214, 39, 40);
             else                hbar(r, 280, 200, avg, 200, 11, 150, 150, 150);
             pdf_line(r->p, 380, r->y - 11, 380, r->y + 3, 1, 60, 60, 60);
-            sprintf(t, "%ld%% of %c", avg, 'A' + active_base);
+            fmt_pct(a, avg);
+            sprintf(t, "%s of %c", a, 'A' + active_base);
+            pdf_text(r->p, 488, r->y, PF_HELV, 9, t, 30, 30, 30);
+        }
+        if (nn) {                               /* normalised, second bar */
+            long avg = nsum / nn;
+            r->y += 13;
+            pdf_text_r(r->p, 274, r->y, PF_HELV, 8, "normalised", 90, 90, 90);
+            pdf_rect(r->p, 280, r->y - 9, 200, 11, 235, 235, 235);
+            if (avg >= 105)     hbar(r, 280, 200, avg, 200, 11, 44, 160, 44);
+            else if (avg <= 95) hbar(r, 280, 200, avg, 200, 11, 214, 39, 40);
+            else                hbar(r, 280, 200, avg, 200, 11, 150, 150, 150);
+            pdf_line(r->p, 380, r->y - 11, 380, r->y + 3, 1, 60, 60, 60);
+            fmt_pct(a, avg);
+            sprintf(t, "%s norm", a);
             pdf_text(r->p, 488, r->y, PF_HELV, 9, t, 30, 30, 30);
         }
         r->y += 16;
@@ -388,7 +521,7 @@ short machine_report(const char *path)
     /* results tables */
     for (g = 0; g < NGROUPS; g++) {
         long mx = 1;
-        short any = 0;
+        short any = 0, rh = b ? 16 : 13;      /* taller rows for the bar pairs */
         for (i = 0; i < ntests; i++)
             if (tests[i].group == g && res[i].state != RS_NONE) {
                 any = 1;
@@ -398,12 +531,19 @@ short machine_report(const char *path)
         prog_set((short)(15 + g * 60 / NGROUPS), group_name[g]);
         heading(r, group_name[g]);
         pdf_text(r->p, LM, r->y, PF_HELVB, 8, "Test", 80, 80, 80);
-        pdf_text_r(r->p, 270, r->y, PF_HELVB, 8, "ops/s", 80, 80, 80);
+        pdf_text_r(r->p, b ? BX_OPS : 255, r->y, PF_HELVB, 8, "ops/s", 80, 80, 80);
         if (b) {
-            pdf_text_r(r->p, 330, r->y, PF_HELVB, 8, "Baseline", 80, 80, 80);
-            pdf_text_r(r->p, 372, r->y, PF_HELVB, 8, "%", 80, 80, 80);
+            pdf_text_r(r->p, BX_BASE, r->y, PF_HELVB, 8, "Baseline", 80, 80, 80);
+            pdf_text_r(r->p, BX_RAW, r->y, PF_HELVB, 8, "Raw %", 80, 80, 80);
+            pdf_text_r(r->p, BX_NORM, r->y, PF_HELVB, 8, "Norm %", 80, 80, 80);
+            /* legend over the bars */
+            pdf_rect(r->p, BX_BAR, r->y - 6, 6, 6, 31, 119, 180);
+            pdf_text(r->p, BX_BAR + 8, r->y, PF_HELV, 7, "base", 80, 80, 80);
+            pdf_rect(r->p, BX_BAR + 30, r->y - 6, 6, 6, 255, 127, 14);
+            pdf_text(r->p, BX_BAR + 38, r->y, PF_HELV, 7, "this (raw/norm)", 80, 80, 80);
+            pdf_text(r->p, BX_SCL, r->y, PF_HELVB, 7, "scales", 80, 80, 80);
         }
-        pdf_text(r->p, 385, r->y, PF_HELVB, 8, "Note", 80, 80, 80);
+        pdf_text(r->p, b ? BX_NOTE : 385, r->y, PF_HELVB, 8, "Note", 80, 80, 80);
         r->y += 5;
         pdf_line(r->p, LM, r->y, RM, r->y, 1, 200, 200, 200);
         r->y += 11;
@@ -411,33 +551,46 @@ short machine_report(const char *path)
             char nm[64], note[40];
             short row;
             if (tests[i].group != g || res[i].state == RS_NONE) continue;
-            need(r, 14);
+            need(r, rh + 1);
             row = r->y;
-            if (((row - TOPY) / 13) & 1) pdf_rect(r->p, LM - 2, row - 9, RM - LM + 4, 13, 246, 248, 252);
-            pdf_fit(PF_HELV, 8, tests[i].name, 150, nm, sizeof(nm));
+            if (((row - TOPY) / rh) & 1)
+                pdf_rect(r->p, LM - 2, row - (b ? 11 : 9), RM - LM + 4, rh, 246, 248, 252);
+            pdf_fit(PF_HELV, 8, tests[i].name, b ? BX_OPS - LM - 40 : 150, nm, sizeof(nm));
             pdf_text(r->p, LM, row, PF_HELV, 8, nm, 20, 20, 20);
             switch (res[i].state) {
             case RS_OK:   fmt_score(a, res[i].score); break;
             case RS_NA:   strcpy(a, "n/a"); break;
             default:      strcpy(a, "failed"); break;
             }
-            pdf_text_r(r->p, 270, row, PF_COUR, 8, a, res[i].state == RS_OK ? 20 : 180, 20, 20);
+            pdf_text_r(r->p, b ? BX_OPS : 270, row, PF_COUR, 8, a, res[i].state == RS_OK ? 20 : 180, 20, 20);
             if (res[i].state == RS_OK && !b)
                 hbar(r, 280, 100, res[i].score, mx, 7, 31, 119, 180);
             if (b) {
                 bv = b->val[i];
                 fmt_score(a, bv);
-                pdf_text_r(r->p, 330, row, PF_COUR, 8, a, 90, 90, 90);
+                pdf_text_r(r->p, BX_BASE, row, PF_COUR, 8, a, 90, 90, 90);
                 if (res[i].state == RS_OK && bv > 0) {
                     long pct = res[i].score * 100L / bv;
+                    long np = norm_pct(i, res[i].score, b);
                     fmt_pct(a, pct);
-                    pdf_text_r(r->p, 372, row, PF_COURB, 8, a,
+                    pdf_text_r(r->p, BX_RAW, row, PF_COUR, 8, a,
                                pct >= 100 ? 34 : 200, pct >= 100 ? 130 : 40, pct >= 100 ? 34 : 40);
+                    fmt_pct(a, np);
+                    pdf_text_r(r->p, BX_NORM, row, PF_COURB, 8, a,
+                               np < 0 ? 150 : (np >= 100 ? 34 : 200),
+                               np < 0 ? 150 : (np >= 100 ? 130 : 40),
+                               np < 0 ? 150 : (np >= 100 ? 34 : 40));
+                    /* raw on top, normalised below in paler colours */
+                    split_bar(r, BX_BAR, row - 10, BX_BARW, 6, pct, 31, 119, 180, 255, 127, 14);
+                    split_bar(r, BX_BAR, row - 3, BX_BARW, 6, np, 150, 190, 222, 253, 190, 133);
+                    /* the middle: equal speed */
+                    pdf_line(r->p, BX_BAR + BX_BARW / 2, row - 11, BX_BAR + BX_BARW / 2, row + 4, 1, 255, 255, 255);
                 }
+                pdf_text(r->p, BX_SCL, row, PF_HELV, 7, norm_label(norm_class(tests[i].key)), 110, 110, 110);
             }
-            pdf_fit(PF_HELV, 7, res[i].note, RM - 385, note, sizeof(note));
-            pdf_text(r->p, 385, row, PF_HELV, 7, note, 110, 110, 110);
-            r->y = row + 13;
+            pdf_fit(PF_HELV, 7, res[i].note, RM - (b ? BX_NOTE : 385), note, sizeof(note));
+            pdf_text(r->p, b ? BX_NOTE : 385, row, PF_HELV, 7, note, 110, 110, 110);
+            r->y = row + rh;
         }
         r->y += 6;
     }
@@ -455,6 +608,36 @@ short machine_report(const char *path)
         }
         r->y += 10;
     }
+    /* conclusion, at the end */
+    if (b) {
+        static char cl[NGROUPS + 4][CONC_W];
+        short nl = conclusion_lines(b, cl, NGROUPS + 4);
+        if (nl) {
+            heading(r, "Conclusion");
+            sprintf(t, "Compared with baseline %c, %s, this machine is:", 'A' + active_base, b->name);
+            para(r, t, 10);
+            r->y += 4;
+            for (k = 0; k < nl; k++) {
+                const char *c = strchr(cl[k], ':');
+                char lead[64];
+                short lw = c ? (short)(c - cl[k] + 1) : 0;
+                need(r, 16);
+                if (lw > 0 && lw < (short)sizeof(lead)) {   /* "VDI primitives:" in bold */
+                    memcpy(lead, cl[k], lw); lead[lw] = 0;
+                    pdf_text(r->p, LM + 8, r->y, PF_HELVB, 10, lead, 20, 20, 20);
+                    pdf_text(r->p, LM + 8 + pdf_textw(PF_HELVB, 10, lead) + 4, r->y,
+                             PF_HELV, 10, c + 2, 20, 20, 20);
+                } else
+                    pdf_text(r->p, LM + 8, r->y, PF_HELV, 10, cl[k], 20, 20, 20);
+                r->y += 15;
+            }
+            r->y += 4;
+            para(r, "Averages are the mean of the per-test percentages in each group, as in the "
+                    "Groups summary at the start; normalised figures allow for colour planes, "
+                    "window and desktop size (see the introduction).", 8);
+        }
+    }
+
     prog_set(95, "Writing PDF");
     return pdf_close(r->p);
 }
@@ -485,18 +668,25 @@ static const struct { const char *pfx; short nc; } nctab[] = {
     { "VDI.MOUSE", NC_NONE }, { "VDI.GETPIX", NC_NONE },
     { "VDI.", NC_FIXED },
     { "AES.OPEN", NC_AREA }, { "AES.MOVE", NC_AREA }, { "AES.SIZE", NC_AREA },
-    { "AES.TOP", NC_AREA }, { "AES.SCROLL", NC_AREA },
+    { "AES.TOP", NC_AREA }, { "AES.SCROLL", NC_AREA }, { "AES.SCRSL", NC_AREA },
     { "AES.OBJDRAW", NC_FIXED }, { "AES.FDIAL", NC_FIXED },
+    { "AES.DLG", NC_FIXED },
     { "AES.", NC_NONE },
     { "ALN.WMOVE", NC_AREA }, { "ALN.WOPEN", NC_AREA }, { "ALN.WSCR", NC_AREA },
-    { "ALN.VSC", NC_AREA }, { "ALN.HSC", NC_AREA }, { "ALN.", NC_FIXED },
+    { "ALN.VSC", NC_AREA }, { "ALN.HSC", NC_AREA }, { "ALN.WD.", NC_AREA },
+    { "ALN.", NC_FIXED },
     { "FULL.", NC_DESK },
     { "GDOS.SCRMIX", NC_AREA }, { "GDOS.T", NC_FIXED }, { "GDOS.BOLD", NC_FIXED },
     { "GDOS.ARBPT", NC_FIXED }, { "GDOS.", NC_NONE },
     { NULL, NC_NONE }
 };
 
-static short norm_class(const char *key)
+const char *norm_label(short nc)
+{
+    return (nc >= 0 && nc <= NC_DESK) ? nc_label[nc] : "";
+}
+
+short norm_class(const char *key)
 {
     short i;
     for (i = 0; nctab[i].pfx; i++)
@@ -504,20 +694,69 @@ static short norm_class(const char *key)
     return NC_NONE;
 }
 
-/* units of work per operation on machine p for class nc (relative scale) */
-static double work_units(const PROF *p, short nc)
+/* units of work per operation on a machine of geometry g, class nc */
+static double work_units_g(const GEOM *g, short nc)
 {
-    double pl = p->planes > 0 ? p->planes : 1;
-    double w = p->tw, h = p->th, mn = w < h ? w : h;
+    double pl = g->planes > 0 ? g->planes : 1;
+    double w = g->tw, h = g->th, mn = w < h ? w : h;
     switch (nc) {
     case NC_FIXED: return pl;
     case NC_LEN:   return (w + h) / 2.0 * pl;
     case NC_MIN:   return mn * pl;
     case NC_DIM2:  return mn * mn * pl;
     case NC_AREA:  return w * h * pl;
-    case NC_DESK:  return (double)p->dw * p->dh * pl;
+    case NC_DESK:  return (double)g->dw * g->dh * pl;
     }
     return 1.0;
+}
+
+static double work_units(const PROF *p, short nc)
+{
+    GEOM g;
+    g.planes = p->planes; g.tw = p->tw; g.th = p->th; g.dw = p->dw; g.dh = p->dh;
+    return work_units_g(&g, nc);
+}
+
+/* fill what a profile did not record, from its screen size and colours
+   (fields <= 0 are missing); sets est when anything was estimated */
+void geom_estimate(GEOM *g, short sw, short sh, short colours)
+{
+    if (sw <= 0) { sw = 640; sh = 400; g->est = 1; }
+    if (g->planes <= 0) {
+        g->planes = colours >= 256 ? 8 : colours >= 16 ? 4 : colours >= 4 ? 2 : 1;
+        if (colours <= 0) g->est = 1;
+    }
+    if (g->dw <= 0) { g->dw = sw; g->dh = sh - 20; g->est = 1; }
+    if (g->tw <= 0) {
+        g->tw = g->dw < 400 ? g->dw - 24 : g->dw - g->dw / 3 - 12;
+        g->th = g->dh - 50;
+        g->est = 1;
+    }
+}
+
+/* this machine, as the last run measured it */
+void this_geom(GEOM *g)
+{
+    memset(g, 0, sizeof(*g));
+    g->planes = planes;
+    g->tw = run_tw_w; g->th = run_tw_h;
+    g->dw = desk.g_w; g->dh = desk.g_h;
+    geom_estimate(g, scr_w, scr_h, ncolors);
+}
+
+/* this machine's result for test i, normalised, as % of baseline b */
+long norm_pct(short i, long score, const BASELINE *b)
+{
+    GEOM me;
+    short nc;
+    double a, c;
+    if (!b || !b->used || score < 0 || b->val[i] <= 0) return -1;
+    this_geom(&me);
+    nc = norm_class(tests[i].key);
+    a = (double)score * work_units_g(&me, nc);
+    c = (double)b->val[i] * work_units_g(&b->geo, nc);
+    if (c <= 0) return -1;
+    return (long)(a * 100.0 / c + 0.5);
 }
 
 static void ptrim(char *s)
@@ -539,17 +778,17 @@ static long parse_val(const char *s)
 
 static short load_prof(const char *path, const char *fname, PROF *p)
 {
-    FILE *f = fopen(path, "r");
+    LSRC f;
     char line[160], *eq, *c;
     short i, found = 0;
-    if (!f) return 0;
+    if (!lsrc_open(&f, path)) return 0;
     memset(p, 0, sizeof(*p));
     for (i = 0; i < MAX_TESTS; i++) p->val[i] = -1;
     strncpy(p->file, fname, sizeof(p->file) - 1);
     strncpy(p->name, fname, sizeof(p->name) - 1);
     strcpy(p->blit, "?");
     p->dur = 200;
-    while (fgets(line, sizeof(line), f)) {
+    while (lsrc_gets(line, sizeof(line), &f)) {
         if (line[0] == ';' || line[0] == '#' || line[0] == '[') continue;
         if ((c = strchr(line, ';')) != NULL) *c = 0;
         eq = strchr(line, '=');
@@ -579,7 +818,7 @@ static short load_prof(const char *path, const char *fname, PROF *p)
             if (p->val[i] >= 0) found++;
         }
     }
-    fclose(f);
+    lsrc_close(&f);
     if (!found) return 0;
     /* older profiles: estimate what wasn't recorded */
     if (p->sw <= 0) { p->sw = 640; p->sh = 400; p->est = 1; }
@@ -616,7 +855,9 @@ static short collect_profiles(const char *dir, PROF *pr, short max, short *total
             sprintf(m, "Loading %s", dta.dta_name);
             prog_set((short)(2 + (n < 28 ? n : 28)), m);
         }
-        if (n < max) {
+        if (!strcmp(dta.dta_name, ref_file))
+            ;                            /* the built-in one is already A */
+        else if (n < max) {
             if (load_prof(path, dta.dta_name, &pr[n])) { n++; (*total)++; }
         } else
             (*total)++;                  /* counted, not loaded */
@@ -789,11 +1030,20 @@ short profiles_report(const char *dir, const char *path, short *nfound, short *n
     if (!pr) return 0;
     {
         short tot = 0;
-        np = collect_profiles(dir, pr, MAX_PROF, &tot);
+        /* A is always the built-in reference, then the folder's profiles */
+        np = collect_profiles(dir, pr + 1, MAX_PROF - 1, &tot);
         if (ntotal) *ntotal = tot;
     }
     if (nfound) *nfound = np;
     if (!np) { free(pr); return 0; }
+    if (load_prof(REF_PATH, ref_file, &pr[0])) {
+        short l = (short)strlen(pr[0].name);
+        if (l > (short)(sizeof(pr[0].name) - sizeof(REF_TAG))) l = sizeof(pr[0].name) - sizeof(REF_TAG);
+        strcpy(pr[0].name + l, REF_TAG);
+        np++;
+    } else {
+        memmove(pr, pr + 1, sizeof(PROF) * np);
+    }
 
     r->p = pdf_create(path);
     if (!r->p) { free(pr); return 0; }

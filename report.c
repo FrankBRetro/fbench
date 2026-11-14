@@ -69,28 +69,70 @@ void baseline_from_results(short slot, const char *name, const RESULT *r)
         b->val[i] = (i < ntests && r[i].state == RS_OK) ? r[i].score : -1;
     strncpy(b->name, name, sizeof(b->name) - 1);
     strcpy(b->file, "(this run)");
+    this_geom(&b->geo);
     b->used = 1;
 }
 
+short lsrc_open(LSRC *l, const char *path)
+{
+    l->f = NULL; l->s = NULL;
+    if (!strcmp(path, REF_PATH)) { l->s = ref_fbp; return 1; }
+    l->f = fopen(path, "r");
+    return l->f != NULL;
+}
+char *lsrc_gets(char *buf, short n, LSRC *l)
+{
+    short i = 0;
+    if (l->f) return fgets(buf, n, l->f);
+    if (!l->s || !*l->s) return NULL;
+    while (*l->s && i < n - 1) {
+        char c = *l->s++;
+        buf[i++] = c;
+        if (c == '\n') break;
+    }
+    buf[i] = 0;
+    return buf;
+}
+void lsrc_close(LSRC *l)
+{
+    if (l->f) fclose(l->f);
+    l->f = NULL; l->s = NULL;
+}
+
+/* the built-in reference profile (STE, TOS 1.6, blitter, medium res, run
+   in cycle-exact Hatari) is always baseline A and the active one at start */
+void baseline_builtin(void)
+{
+    short slot = baseline_load(REF_PATH);
+    if (slot >= 0) {
+        BASELINE *b = &base[slot];
+        b->name[sizeof(b->name) - 1 - (sizeof(REF_TAG) - 1)] = 0;
+        strcat(b->name, REF_TAG);
+        active_base = slot;
+    }
+}
+
+/* Clear baselines keeps the built-in one */
 void baseline_clear(void)
 {
     memset(base, 0, sizeof(base));
     active_base = 0;
+    baseline_builtin();
 }
 
 short baseline_load(const char *path)
 {
-    FILE *f;
+    LSRC f;
     char line[160], *eq, *c;
-    short slot, i, found = 0;
+    const char *fname = strcmp(path, REF_PATH) ? base_name(path) : ref_file;
+    short slot, i, found = 0, sw = 0, sh = 0, colours = 0;
     BASELINE *b;
 
-    f = fopen(path, "r");
-    if (!f) return -1;
+    if (!lsrc_open(&f, path)) return -1;
 
     /* same file already loaded? reuse its slot, else first free, else active */
     for (slot = 0; slot < MAX_BASE; slot++)
-        if (base[slot].used && !strcmp(base[slot].file, base_name(path))) break;
+        if (base[slot].used && !strcmp(base[slot].file, fname)) break;
     if (slot == MAX_BASE)
         for (slot = 0; slot < MAX_BASE && base[slot].used; slot++)
             ;
@@ -99,10 +141,10 @@ short baseline_load(const char *path)
     b = &base[slot];
     memset(b, 0, sizeof(*b));
     for (i = 0; i < MAX_TESTS; i++) b->val[i] = -1;
-    strncpy(b->file, base_name(path), sizeof(b->file) - 1);
+    strncpy(b->file, fname, sizeof(b->file) - 1);
     strncpy(b->name, b->file, sizeof(b->name) - 1);
 
-    while (fgets(line, sizeof(line), f)) {
+    while (lsrc_gets(line, sizeof(line), &f)) {
         if (line[0] == ';' || line[0] == '#' || line[0] == '[') continue;
         if ((c = strchr(line, ';')) != NULL) *c = 0;
         trim(line);
@@ -110,16 +152,27 @@ short baseline_load(const char *path)
         if (!eq) continue;
         *eq++ = 0;
         trim(line);
+        while (*eq == ' ') eq++;
         if (!strcmp(line, "NAME")) {
-            while (*eq == ' ') eq++;
             strncpy(b->name, eq, sizeof(b->name) - 1);
+        } else if (!strcmp(line, "SCREEN")) {
+            short pl = 0, cc = 0;
+            if (sscanf(eq, "%hdx%hd %hd colours %hd planes", &sw, &sh, &cc, &pl) >= 2) {
+                if (cc) colours = cc;
+                if (pl) b->geo.planes = pl;
+            }
+        } else if (!strcmp(line, "PLANES"))  { b->geo.planes = (short)atoi(eq);
+        } else if (!strcmp(line, "COLOURS")) { colours = (short)atoi(eq);
+        } else if (!strcmp(line, "TESTWIN")) { sscanf(eq, "%hdx%hd", &b->geo.tw, &b->geo.th);
+        } else if (!strcmp(line, "DESK"))    { sscanf(eq, "%hdx%hd", &b->geo.dw, &b->geo.dh);
         } else if ((i = find_test(line)) >= 0) {
             b->val[i] = parse_score(eq);
             if (b->val[i] >= 0) found++;
         }
     }
-    fclose(f);
+    lsrc_close(&f);
     if (!found) { b->used = 0; return -1; }
+    geom_estimate(&b->geo, sw, sh, colours);   /* older profiles */
     b->used = 1;
     return slot;
 }
@@ -230,8 +283,8 @@ short report_export(const char *path)
     fprintf(f, "%s\n", line);
 
     for (g = 0; g < NGROUPS; g++) {
-        long sum = 0;
-        short cnt = 0;
+        long sum = 0, nsum = 0;
+        short cnt = 0, ncnt = 0;
         fprintf(f, "\n[ %s ]\n", group_name[g]);
         prog_set((short)(20 + g * 60 / NGROUPS), group_name[g]);
         for (i = 0; i < ntests; i++) {
@@ -245,14 +298,18 @@ short report_export(const char *path)
             sprintf(line, "%-26.26s %10s", tests[i].name, v);
             for (b = 0; b < MAX_BASE; b++) {
                 long bv;
-                char bs[20], ps[12];
+                char bs[20], ps[16];
                 if (!base[b].used) continue;
                 bv = base[b].val[i];
                 fmt_score(bs, bv);
                 if (res[i].state == RS_OK && bv > 0) {
                     long pct = res[i].score * 100L / bv;
-                    sprintf(ps, "%ld%%", pct);
-                    if (b == active_base) { sum += pct; cnt++; }
+                    if (pct >= 10000L) sprintf(ps, "%ldx", pct / 100); else sprintf(ps, "%ld%%", pct);
+                    if (b == active_base) {
+                        long np = norm_pct(i, res[i].score, &base[b]);
+                        sum += pct; cnt++;
+                        if (np >= 0) { nsum += np; ncnt++; }
+                    }
                 } else strcpy(ps, "-");
                 if (compact) sprintf(cell, "  %6s", ps);
                 else         sprintf(cell, " %10s %5s", bs, ps);
@@ -266,30 +323,77 @@ short report_export(const char *path)
             ascii_bar(bar, sum / cnt, 40);
             fprintf(f, "  => %s index vs %c: %ld%%  [%s]  (%d tests)\n",
                     group_name[g], 'A' + active_base, sum / cnt, bar, cnt);
+            if (ncnt) {
+                ascii_bar(bar, nsum / ncnt, 40);
+                fprintf(f, "     normalised:     %5ld%%  [%s]\n", nsum / ncnt, bar);
+            }
         }
     }
 
     prog_set(85, "Comparison with baseline");
     if (base[active_base].used) {
-        long sum = 0;
-        short cnt = 0;
-        fprintf(f, "\n-- Comparison with %c: %s --\n", 'A' + active_base, base[active_base].name);
-        fprintf(f, "   (100%% = same speed, bar centre mark '|' = 100%%, full bar = 200%%+)\n\n");
+        BASELINE *bb = &base[active_base];
+        GEOM me;
+        long sum = 0, nsum = 0;
+        short cnt = 0, ncnt = 0;
+        this_geom(&me);
+        fprintf(f, "\n-- Comparison with %c: %s --\n", 'A' + active_base, bb->name);
+        fprintf(f, "   Raw %% = this machine's ops/s as %% of %c (100%% = same speed).\n", 'A' + active_base);
+        fprintf(f, "   Norm %% = the same after allowing for the work one operation does on\n");
+        fprintf(f, "   each machine: colour planes, test window size, desktop size for\n");
+        fprintf(f, "   full-screen tests (see 'Scales'). Bar = normalised; '|' = 100%%,\n");
+        fprintf(f, "   full bar = 200%%+.\n");
+        fprintf(f, "   This machine: planes %d, test window %dx%d, desktop %dx%d%s\n",
+                me.planes, me.tw, me.th, me.dw, me.dh, me.est ? " (estimated)" : "");
+        fprintf(f, "   Baseline %c:   planes %d, test window %dx%d, desktop %dx%d%s\n\n",
+                'A' + active_base, bb->geo.planes, bb->geo.tw, bb->geo.th, bb->geo.dw, bb->geo.dh,
+                bb->geo.est ? " (estimated - older profile)" : "");
+        fprintf(f, "%-26s %6s %6s %-6s %s\n", "Test", "Raw %", "Norm %", "Scales", "");
         for (i = 0; i < ntests; i++) {
-            long bv = base[active_base].val[i];
-            char bar[34];
+            long bv = bb->val[i], pct, np;
+            char bar[34], ns[16];
             if (res[i].state != RS_OK || bv <= 0) continue;
-            ascii_bar(bar, res[i].score * 100L / bv, 32);
-            fprintf(f, "%-26.26s %5ld%% %s\n", tests[i].name, res[i].score * 100L / bv, bar);
-            sum += res[i].score * 100L / bv; cnt++;
+            pct = res[i].score * 100L / bv;
+            np = norm_pct(i, res[i].score, bb);
+            if (np >= 10000L) sprintf(ns, "%ldx", np / 100); else if (np >= 0) sprintf(ns, "%ld%%", np); else strcpy(ns, "-");
+            ascii_bar(bar, np >= 0 ? np : pct, 32);
+            {
+                const char *lb = norm_label(norm_class(tests[i].key));
+                if (!strcmp(lb, "dim\xB2")) lb = "dim2";        /* plain ASCII file */
+                fprintf(f, "%-26.26s %5ld%% %6s %-6s %s\n", tests[i].name, pct, ns, lb, bar);
+            }
+            sum += pct; cnt++;
+            if (np >= 0) { nsum += np; ncnt++; }
         }
-        if (cnt) fprintf(f, "\nOverall average: %ld%% over %d tests\n", sum / cnt, cnt);
+        if (cnt) fprintf(f, "\nOverall average: %ld%% raw", sum / cnt);
+        if (ncnt) fprintf(f, ", %ld%% normalised", nsum / ncnt);
+        if (cnt) fprintf(f, " over %d tests\n", cnt);
+        fprintf(f, "\nScales: planes = fixed-size drawing; len = lines across the window;\n");
+        fprintf(f, "min / dim2 = shapes sized from the window (size, size squared);\n");
+        fprintf(f, "area = whole test window; desk = full-screen window; calls = AES and\n");
+        fprintf(f, "query calls with no pixel work (not adjusted). Normalisation is a model:\n");
+        fprintf(f, "fixed per-call costs mean small operations at high resolutions are\n");
+        fprintf(f, "under-rewarded.\n");
     }
 
     fprintf(f, "\nNotes: timings use the 200 Hz system timer. Under MultiTOS other\n");
     fprintf(f, "applications keep running and can lower the scores; close them for\n");
     fprintf(f, "repeatable results. Fbench holds the screen (wind_update) while each\n");
     fprintf(f, "test runs. NVDI and other accelerated VDIs may ignore the blitter switch.\n");
+
+    /* conclusion, at the end */
+    if (base[active_base].used) {
+        static char cl[NGROUPS + 4][CONC_W];
+        short nl = conclusion_lines(&base[active_base], cl, NGROUPS + 4);
+        if (nl) {
+            fprintf(f, "\n-- Conclusion --\n");
+            fprintf(f, "Compared with baseline %c, %s, this machine is:\n\n",
+                    'A' + active_base, base[active_base].name);
+            for (i = 0; i < nl; i++) fprintf(f, "  %s\n", cl[i]);
+            fprintf(f, "\n(mean of the per-test %% in each group; normalised allows for colour\n"
+                       "planes, window and desktop size)\n");
+        }
+    }
     fclose(f);
     prog_set(100, "Done");
     graf_mouse(ARROW, NULL);

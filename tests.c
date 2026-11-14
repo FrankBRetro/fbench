@@ -368,6 +368,7 @@ static void s_scroll(void)
         short p[4];
         vsf_color(bh, col(i / 16));
         p[0] = ax; p[1] = ay + i; p[2] = ax + aw - 1; p[3] = ay + i + 7;
+        if (p[3] > ay + ah - 1) p[3] = ay + ah - 1;   /* stay in the area */
         vr_recfl(bh, p);
     }
 }
@@ -484,6 +485,9 @@ static short aux_align;     /* 0 = anywhere, 1 = work x on 16 px, 2 = work x on 
 static short move_dx = 16;  /* horizontal step of the move test */
 
 #define AUX_KIND (NAME | MOVER | SIZER | INFO | CLOSER | UPARROW | DNARROW | VSLIDE)
+#define AUX_BARS (AUX_KIND | LFARROW | RTARROW | HSLIDE)
+#define AUX_NOBARS (NAME | MOVER | INFO | CLOSER)
+static short aux_kind = AUX_KIND;  /* kind of the next aux window */
 
 static void aux_create(short open)
 {
@@ -500,14 +504,14 @@ static void aux_create(short open)
         GRECT w = r;
         w.g_x = ((w.g_x + 15) & ~15) + (aux_align == 2 ? 5 : 0);
         w.g_w &= ~15;
-        wind_calc_grect(WC_BORDER, AUX_KIND, &w, &r);
+        wind_calc_grect(WC_BORDER, aux_kind, &w, &r);
     }
     aux_r = r;
     fb_step("aux: wind_create");
-    aux_h = wind_create_grect(AUX_KIND, &desk);
+    aux_h = wind_create_grect(aux_kind, &desk);
     if (aux_h <= 0) { aux_h = 0; test_fail = 1; strcpy(cur_note, "no window handles"); return; }
     win_register(WN_AUX, aux_h, " Fbench AES ");
-    wins[WN_AUX].kind = NAME | MOVER | SIZER | INFO | CLOSER | UPARROW | DNARROW | VSLIDE;
+    wins[WN_AUX].kind = aux_kind;
     wind_set_str(aux_h, WF_NAME, " Fbench AES ");
     wind_set_str(aux_h, WF_INFO, " window test ");
     aux_isopen = 0;
@@ -533,6 +537,7 @@ static void aux_destroy(void)
     aux_h = 0;
     wins[WN_AUX].h = 0;
     aux_align = 0;
+    aux_kind = AUX_KIND;
     move_dx = 16;
     drain_events();
 }
@@ -599,12 +604,12 @@ static void c_wscroll(void) { if (!mouse_vis) graf_mouse(M_ON, NULL); fb_update(
 static void scroll_win(short wh)
 {
     GRECT r, work;
-    short p[8], line = char_h;
+    short p[8], line = char_h, n = 0;
     char buf[40];
 
     wind_get_grect(wh, WF_WORKXYWH, &work);
     wind_get_grect(wh, WF_FIRSTXYWH, &r);
-    while (r.g_w && r.g_h) {
+    while (r.g_w && r.g_h && ++n < 100) {      /* cap: a broken list can't hang us */
         if (rc_intersect(&work, &r) && r.g_h > line) {
             p[0] = r.g_x; p[1] = r.g_y + line; p[2] = r.g_x + r.g_w - 1; p[3] = r.g_y + r.g_h - 1;
             p[4] = r.g_x; p[5] = r.g_y;        p[6] = r.g_x + r.g_w - 1; p[7] = r.g_y + r.g_h - 1 - line;
@@ -617,7 +622,14 @@ static void scroll_win(short wh)
     }
     sprintf(buf, "Scrolled line %d", tog++);
     v_gtext(bh, work.g_x + 4, work.g_y + work.g_h - line, buf);
-    wind_set(wh, WF_VSLIDE, (tog * 37) % 1000, 0, 0, 0);
+    /* move the slider too, as a real program would - but only on a window
+       that has one: the test window (NAME|INFO|CLOSER) doesn't, and some
+       AESes hang setting a slider the window doesn't have */
+    {
+        WIN *w = win_find(wh);
+        if (w && (w->kind & VSLIDE))
+            wind_set(wh, WF_VSLIDE, (tog * 37) % 1000, 0, 0, 0);
+    }
 }
 static void b_wscroll(void)   { scroll_win(wins[WN_TEST].h); }
 
@@ -695,6 +707,115 @@ static void s_ascr_a(void)  { aux_align = 1; aux_open(); if (!mouse_vis) graf_mo
 static void s_ascr_u(void)  { aux_align = 2; aux_open(); if (!mouse_vis) graf_mouse(M_OFF, NULL); }
 static void c_ascr(void)    { if (!mouse_vis) graf_mouse(M_ON, NULL); aux_destroy(); }
 static void b_ascroll(void) { scroll_win(aux_h); }
+/* AES.SCRSL: a window with arrows and a vertical slider, scrolled a line
+   at a time with the slider following, like a text viewer */
+/* ---- scrolling a window right, left and diagonally ----
+   param: direction 1 right, 2 left, 3 down-right, 4 up-left (the way the
+   view moves, as with the window's arrows: "right" moves the content
+   left); + 8 = window with both sliders (moved every step), else none;
+   + 16 = work x on the 16 px grid, step 16 px; + 32 = work x on the grid
+   + 5, step 3 px. Vertical steps are one text line. */
+static short wd_dx, wd_dy;
+static void wd_fill(void)                /* stripes and bars to move about */
+{
+    GRECT r, work;
+    short p[4], i;
+    wind_get_grect(aux_h, WF_WORKXYWH, &work);
+    wind_get_grect(aux_h, WF_FIRSTXYWH, &r);
+    vsf_interior(bh, FIS_SOLID);
+    for (i = 0; r.g_w && r.g_h && i < 100; i++) {
+        if (rc_intersect(&work, &r) && rc_intersect(&desk, &r)) {
+            short k;
+            p[0] = r.g_x; p[1] = r.g_y; p[2] = r.g_x + r.g_w - 1; p[3] = r.g_y + r.g_h - 1;
+            vs_clip(bh, 1, p);
+            vsf_color(bh, 0);
+            vr_recfl(bh, p);
+            for (k = 0; k < work.g_h; k += 16) {
+                vsf_color(bh, col(k / 16));
+                p[0] = work.g_x; p[1] = work.g_y + k; p[2] = work.g_x + work.g_w - 1; p[3] = p[1] + 5;
+                vr_recfl(bh, p);
+            }
+            for (k = 0; k < work.g_w; k += 24) {
+                vsf_color(bh, col(k / 24 + 3));
+                p[0] = work.g_x + k; p[1] = work.g_y; p[2] = p[0] + 3; p[3] = work.g_y + work.g_h - 1;
+                vr_recfl(bh, p);
+            }
+        }
+        wind_get_grect(aux_h, WF_NEXTXYWH, &r);
+    }
+    p[0] = tw_area.g_x; p[1] = tw_area.g_y;
+    p[2] = tw_area.g_x + tw_area.g_w - 1; p[3] = tw_area.g_y + tw_area.g_h - 1;
+    vs_clip(bh, 1, p);
+}
+static void s_wdir(void)
+{
+    short dir = cur_param & 7, al = cur_param >> 4, step = al == 2 ? 3 : 16;
+    aux_kind = (cur_param & 8) ? AUX_BARS : AUX_NOBARS;
+    aux_align = al;
+    aux_open();
+    if (!aux_h || test_fail) return;
+    wd_dx = dir == 1 || dir == 3 ? step : -step;
+    wd_dy = dir == 3 ? char_h : dir == 4 ? -char_h : 0;
+    sprintf(cur_note + strlen(cur_note), ", step %d", step);
+    wd_fill();
+    if (!mouse_vis) graf_mouse(M_OFF, NULL);
+}
+/* scroll the visible parts of the window by dx, dy (either sign) */
+static void scroll_dir(short wh, short dx, short dy)
+{
+    GRECT r, work;
+    short p[8], adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy, n = 0;
+    char  c[2];
+
+    wind_get_grect(wh, WF_WORKXYWH, &work);
+    wind_get_grect(wh, WF_FIRSTXYWH, &r);
+    vsf_interior(bh, FIS_SOLID);
+    while (r.g_w && r.g_h && ++n < 100) {
+        if (rc_intersect(&work, &r) && rc_intersect(&desk, &r)) {
+            short x0 = r.g_x, y0 = r.g_y, x1 = r.g_x + r.g_w - 1, y1 = r.g_y + r.g_h - 1;
+            p[0] = x0; p[1] = y0; p[2] = x1; p[3] = y1;
+            vs_clip(bh, 1, p);
+            if (r.g_w > adx && r.g_h > ady) {           /* move what stays visible */
+                p[0] = dx > 0 ? x0 + adx : x0; p[2] = dx > 0 ? x1 : x1 - adx;
+                p[4] = dx > 0 ? x0 : x0 + adx; p[6] = dx > 0 ? x1 - adx : x1;
+                p[1] = dy > 0 ? y0 + ady : y0; p[3] = dy > 0 ? y1 : y1 - ady;
+                p[5] = dy > 0 ? y0 : y0 + ady; p[7] = dy > 0 ? y1 - ady : y1;
+                vro_cpyfm(bh, S_ONLY, p, &scr_mfdb, &scr_mfdb);
+            }
+            if (adx) {                                  /* new column */
+                p[0] = dx > 0 ? x1 - adx + 1 : x0; p[2] = dx > 0 ? x1 : x0 + adx - 1;
+                if (p[0] < x0) p[0] = x0;
+                if (p[2] > x1) p[2] = x1;
+                p[1] = y0; p[3] = y1;
+                vsf_color(bh, 0);
+                vr_recfl(bh, p);
+                p[1] = work.g_y + (tog & 7) * 4; p[3] = work.g_y + work.g_h - 1 - (tog & 3) * 8;
+                vsf_color(bh, col(tog));
+                vr_recfl(bh, p);
+            }
+            if (ady) {                                  /* new line */
+                p[1] = dy > 0 ? y1 - ady + 1 : y0; p[3] = dy > 0 ? y1 : y0 + ady - 1;
+                if (p[1] < y0) p[1] = y0;
+                if (p[3] > y1) p[3] = y1;
+                p[0] = x0; p[2] = x1;
+                vsf_color(bh, 0);
+                vr_recfl(bh, p);
+                c[0] = '0' + tog % 10; c[1] = 0;
+                v_gtext(bh, work.g_x + 4, dy > 0 ? work.g_y + work.g_h - ady : work.g_y, c);
+            }
+        }
+        wind_get_grect(wh, WF_NEXTXYWH, &r);
+    }
+    p[0] = tw_area.g_x; p[1] = tw_area.g_y;
+    p[2] = tw_area.g_x + tw_area.g_w - 1; p[3] = tw_area.g_y + tw_area.g_h - 1;
+    vs_clip(bh, 1, p);
+    tog++;
+    if (wins[WN_AUX].kind & HSLIDE) wind_set(wh, WF_HSLIDE, (tog * 37) % 1000, 0, 0, 0);
+    if (dy && (wins[WN_AUX].kind & VSLIDE)) wind_set(wh, WF_VSLIDE, (tog * 53) % 1000, 0, 0, 0);
+}
+static void b_wdir(void) { scroll_dir(aux_h, wd_dx, wd_dy); }
+
+static void s_wscrsl(void)  { aux_align = 0; aux_open(); if (!mouse_vis) graf_mouse(M_OFF, NULL); }
 
 /* ---- generic rectangle-list scroller ----
    Scrolls the visible parts of a window's work area left by dx or up by dy,
@@ -888,6 +1009,311 @@ static void b_ofind(void)
     objc_find(otree, 0, 8, pts[k][0], pts[k][1]);
 }
 
+/* ---- bigger dialogs: medium (~20 objects), complex (~45), very complex
+   (~80, nested 4 deep). Built at run time in character units, so the same
+   dialog is drawn on every machine; the row pitch shrinks to fit the test
+   window (ST low / medium). Objects that still don't fit are left out and
+   the note gives the real count. param: level 1..3, + 16 = x on the 16 px
+   grid, + 32 = x on the grid + 3 */
+#ifndef OS_CROSSED                /* older / PC GEM headers */
+# define OS_CROSSED  0x0002
+#endif
+#ifndef OS_CHECKED
+# define OS_CHECKED  0x0004
+#endif
+#ifndef OF_RBUTTON
+# define OF_RBUTTON  0x0010
+#endif
+#define DLG_MAX  256
+#define DLG_COLS 34
+static OBJECT  dtree[DLG_MAX];
+static TEDINFO dted[80];
+static BITBLK  dbit;
+static short   dabs_x[DLG_MAX], dabs_y[DLG_MAX];
+static short   dn, dtn, d_w, d_h, d_rp, d_oh, d_ok;
+static short   dimg[16] = {                          /* 16x16 disk icon */
+    0x7FFE, 0x4012, 0x4012, 0x4012, 0x4012, 0x401E, 0x4002, 0x4002,
+    0x5FFA, 0x500A, 0x500A, 0x57CA, 0x500A, 0x57CA, 0x500A, 0x7FFE };
+
+/* add an object at x, y (pixels from the dialog's top left); -1 = left out */
+static short d_add(short par, short type, short x, short y, short w, short h)
+{
+    OBJECT *o;
+    if (dn >= DLG_MAX || (dn && par < 0)) return -1;
+    if (dn && (x < 0 || y < 0 || x + w > d_w || y + h > d_h)) return -1;
+    o = &dtree[dn];
+    memset(o, 0, sizeof(*o));
+    o->ob_next = o->ob_head = o->ob_tail = -1;
+    o->ob_type = type;
+    o->ob_x = dn ? x - dabs_x[par] : x;
+    o->ob_y = dn ? y - dabs_y[par] : y;
+    o->ob_width = w; o->ob_height = h;
+    dabs_x[dn] = dn ? x : 0; dabs_y[dn] = dn ? y : 0;
+    if (dn) {
+        if (dtree[par].ob_head < 0) dtree[par].ob_head = dn;
+        else dtree[dtree[par].ob_tail].ob_next = dn;
+        dtree[par].ob_tail = dn;
+        o->ob_next = par;
+    }
+    return dn++;
+}
+/* column / row to pixels */
+#define DC(c)  ((c) * char_w)
+#define DR(r)  ((r) * d_rp + 2)
+
+static short d_box(short par, short c, short r, short w, short rows, long spec)
+{
+    short i = d_add(par, G_BOX, DC(c), DR(r), DC(w), rows * d_rp - (d_rp - d_oh));
+    if (i >= 0) dtree[i].ob_spec.index = spec;
+    return i;
+}
+static short d_str(short par, short c, short r, const char *s)
+{
+    short i = d_add(par, G_STRING, DC(c), DR(r), DC((short)strlen(s)), d_oh);
+    if (i >= 0) dtree[i].ob_spec.free_string = (char *)s;
+    return i;
+}
+static short d_btn(short par, short c, short r, short w, const char *s, short fl, short st)
+{
+    short i = d_add(par, G_BUTTON, DC(c), DR(r), DC(w), d_oh);
+    if (i >= 0) {
+        dtree[i].ob_spec.free_string = (char *)s;
+        dtree[i].ob_flags = fl; dtree[i].ob_state = st;
+    }
+    return i;
+}
+static short d_ted_px(short par, short type, short x, short y, short w, short h,
+                      const char *txt, const char *tmpl, const char *valid,
+                      short font, short just, short st)
+{
+    short i;
+    TEDINFO *t;
+    if (dtn >= (short)(sizeof(dted) / sizeof(dted[0]))) return -1;
+    i = d_add(par, type, x, y, w, h);
+    if (i < 0) return -1;
+    t = &dted[dtn++];
+    memset(t, 0, sizeof(*t));
+    t->te_ptext = (char *)txt; t->te_ptmplt = (char *)tmpl; t->te_pvalid = (char *)valid;
+    t->te_font = font; t->te_just = just; t->te_color = 0x1180; t->te_thickness = -1;
+    t->te_txtlen = (short)strlen(txt) + 1; t->te_tmplen = (short)strlen(tmpl) + 1;
+    dtree[i].ob_spec.tedinfo = t;
+    dtree[i].ob_state = st;
+    return i;
+}
+static short d_ted(short par, short type, short c, short r, short w,
+                   const char *txt, const char *tmpl, const char *valid, short st)
+{
+    return d_ted_px(par, type, DC(c), DR(r), DC(w), d_oh, txt, tmpl, valid, 3,
+                    type == G_FTEXT || type == G_FBOXTEXT ? 0 : 2, st);
+}
+
+/* level 4, "pathological": ~140 objects. Three full-size layers drawn
+   over each other, towers of boxes nested 6 levels below the root, every
+   object state at once, 3 pixel borders, images at
+   odd x offsets, overlapping objects, transparent fills and small text */
+/* NOT deeper than 6: TOS's objc_draw (GEM's everyobj) walks the tree with
+   x[8]/y[8] arrays on its stack indexed by level + 1, and visits children
+   down to the depth asked for - level 7 or more writes past them and
+   crashes TOS 1.x (STE, TOS 1.62) */
+#define DLG_MAXLEVEL 6
+static void d_patho(void)
+{
+    static const char *const pt[8] = { "Wi", "Fx", "Qz", "Ok", "Ab", "Dz", "Mu", "Xe" };
+    short lh = DR(13) - 1, l1, l2, l3, c, r, n = 0, i, v, j;
+    long  pat = ncolors >= 4 ? 0x00FF1122L : 0x00FF1121L;
+
+    if (lh > d_h) lh = d_h;
+
+    l1 = d_add(0, G_BOX, 0, 0, d_w, lh);
+    if (l1 < 0) return;
+    dtree[l1].ob_spec.index = pat;
+    l2 = d_add(l1, G_BOX, 2, 2, d_w - 4, lh - 4);
+    if (l2 < 0) return;
+    dtree[l2].ob_spec.index = 0x00021131L;              /* 2 px, pattern 3 */
+    l3 = d_add(l2, G_IBOX, 4, 4, d_w - 8, lh - 8);
+    if (l3 < 0) return;
+    dtree[l3].ob_spec.index = 0x00FD1100L;              /* 3 px outside */
+
+    for (r = 0; r < 13; r++)
+        for (c = 0; c < 8; c++, n++) {
+            short x = DC(1 + 4 * c), y = DR(r);
+            switch (n % 8) {
+            case 0:                                     /* every state at once */
+                i = d_ted_px(l3, G_BOXTEXT, x, y, DC(4), d_oh, pt[r & 7], "", "", 5, 2,
+                             OS_SELECTED | OS_CROSSED | OS_CHECKED | OS_DISABLED |
+                             OS_OUTLINED | OS_SHADOWED);
+                if (i >= 0) dtree[i].ob_spec.tedinfo->te_thickness = -3;
+                break;
+            case 1:                                     /* image off the grid */
+                i = d_add(l3, G_IMAGE, x + (n % 7), y, 16, 16);
+                if (i >= 0) { dtree[i].ob_spec.bitblk = &dbit; dtree[i].ob_state = OS_SELECTED; }
+                break;
+            case 2:
+                d_ted_px(l3, G_FTEXT, x, y, DC(4), d_oh, "12", "#___", "999", 5, 0, OS_CROSSED);
+                break;
+            case 3:
+                d_btn(l3, 1 + 4 * c, r, 4, "Go", OF_SELECTABLE | OF_DEFAULT,
+                      OS_SHADOWED | OS_OUTLINED | OS_CHECKED | OS_CROSSED);
+                break;
+            case 4:
+                i = d_add(l3, G_BOXCHAR, x, y, DC(4), d_oh);
+                if (i >= 0) {
+                    dtree[i].ob_spec.index = ((long)('A' + r) << 24) | 0x00FD1171L;
+                    dtree[i].ob_state = OS_SELECTED | OS_CROSSED;
+                }
+                break;
+            case 5:                                     /* tower: down to level 6 */
+                v = d_add(l3, G_BOX, x, y, DC(4), d_oh);
+                for (j = 1; j < DLG_MAXLEVEL - 4 && v >= 0; j++) {   /* cell is level 4 */
+                    dtree[v].ob_spec.index = 0x00FF1100L | ((j & 1) ? 0x41 : 0);
+                    v = d_add(v, G_BOX, x + j, y + (j > 1), DC(4) - 2 * j, d_oh - 2 * (j > 1));
+                }
+                if (v >= 0) {
+                    dtree[v].ob_spec.index = 0x00FF1100L;
+                    d_ted_px(v, G_BOXTEXT, x + 4, y + 2, DC(4) - 8, d_oh - 4 > 1 ? d_oh - 4 : 1,
+                             "6", "", "", 5, 2, OS_SELECTED);
+                }
+                break;
+            case 6:                                     /* transparent, overlaps the next */
+                i = d_add(l3, G_BOX, x, y, DC(6), d_oh);
+                if (i >= 0) { dtree[i].ob_spec.index = 0x00FE1150L; dtree[i].ob_state = OS_SHADOWED; }
+                break;
+            case 7:
+                i = d_str(l3, 1 + 4 * c, r, pt[c]);
+                if (i >= 0) dtree[i].ob_state = OS_DISABLED | OS_SELECTED;
+                break;
+            }
+        }
+}
+
+static void s_dialog(void)
+{
+    static const char *const tb = "\x01\x02\x03\x04+-*/";   /* toolbar chars */
+    short lvl = cur_param & 15, mode = cur_param >> 4;
+    short rows = lvl == 1 ? 7 : lvl == 2 ? 11 : 14, br = rows - 1;
+    short x0 = ax + 8, y0 = ay + 8, cols, avail_h, i, j, p, k;
+    long  boxsp = ncolors >= 16 ? 0x00FF1173L : 0x00FF1100L;
+
+    if (mode == 1) x0 = (x0 + 15) & ~15;
+    else if (mode == 2) x0 = ((x0 + 15) & ~15) + 3;
+    cols = (ax + aw - 6 - x0) / char_w;               /* 3 px outline + spare */
+    if (cols > DLG_COLS) cols = DLG_COLS;
+    avail_h = ah - 16 - 4;
+    d_rp = char_h + char_h / 2;
+    if (d_rp * rows + 4 > avail_h) d_rp = (avail_h - 4) / rows;
+    if (d_rp < char_h + 1) d_rp = char_h + 1;
+    d_oh = d_rp - 1 > char_h + 2 ? char_h + 2 : d_rp - 1;
+    d_w = DC(cols); d_h = rows * d_rp + 4;
+    if (d_h > avail_h) d_h = avail_h;             /* tiny window: drop what won't fit */
+    dn = dtn = 0;
+
+    /* level 1: title, three fields, radio group, check buttons, buttons */
+    p = d_add(-1, G_BOX, x0, y0, d_w, d_h);
+    dtree[p].ob_spec.index = boxsp;
+    dtree[p].ob_state = lvl == 4 ? OS_OUTLINED | OS_SHADOWED : OS_OUTLINED;
+    dbit.bi_pdata = dimg; dbit.bi_wb = 2; dbit.bi_hl = 16;
+    dbit.bi_x = dbit.bi_y = 0; dbit.bi_color = 1;
+    if (lvl == 4) d_patho();
+    else {
+    d_ted(0, G_BOXTEXT, 1, 0, 32, "Fbench dialog", "", "", OS_SHADOWED);
+    d_ted(0, G_FTEXT, 1, 1, 15, "Atari", "Name: ________", "XXXXXXXX", 0);
+    d_ted(0, G_FTEXT, 1, 2, 15, "0123", "Phone: _______", "9999999", 0);
+    d_ted(0, G_FTEXT, 1, 3, 15, "Glasgow", "City: ________", "XXXXXXXX", 0);
+    d_str(0, 18, 1, "Mode:");
+    k = d_add(0, G_IBOX, DC(18), DR(2), DC(15), 3 * d_rp - (d_rp - d_oh));
+    d_btn(k, 18, 2, 15, "Fast", OF_SELECTABLE | OF_RBUTTON, OS_SELECTED);
+    d_btn(k, 18, 3, 15, "Normal", OF_SELECTABLE | OF_RBUTTON, 0);
+    d_btn(k, 18, 4, 15, "Careful", OF_SELECTABLE | OF_RBUTTON, 0);
+    d_str(0, 1, 4, "Flags:");
+    d_btn(0, 1, 5, 5, "Bold", OF_SELECTABLE, OS_SELECTED);
+    d_btn(0, 6, 5, 5, "Wide", OF_SELECTABLE, lvl > 1 ? OS_CHECKED : 0);
+    d_btn(0, 11, 5, 5, "Fast", OF_SELECTABLE, 0);
+    d_ted_px(0, G_TEXT, DC(18), DR(5), DC(15), d_oh, "Ready.", "", "", 5, 0, 0);
+
+    if (lvl >= 2) {                                 /* rows 6..9 */
+        /* list with a slider */
+        k = d_box(0, 1, 6, 13, 4, 0x00FF1100L);
+        d_str(k, 1, 6, "AUTO");
+        i = d_str(k, 1, 7, "DESKTOP.INF");
+        if (i >= 0) dtree[i].ob_state = OS_SELECTED;
+        d_str(k, 1, 8, "FBENCH.PRG");
+        d_str(k, 1, 9, "NEWDESK.INF");
+        k = d_box(0, 14, 6, 2, 4, 0x00FF1111L);
+        if (k >= 0) {
+            i = d_add(k, G_BOX, DC(14), DR(7), DC(2), d_rp + d_oh / 2);
+            if (i >= 0) dtree[i].ob_spec.index = 0x00FF1101L;
+        }
+        /* toolbar */
+        k = d_box(0, 18, 6, 16, 1, 0x00FF1100L);
+        for (j = 0; j < 8; j++) {
+            i = d_add(k, G_BOXCHAR, DC(18 + 2 * j), DR(6), DC(2), d_oh);
+            if (i >= 0) dtree[i].ob_spec.index = ((long)(unsigned char)tb[j] << 24) | 0x00FF1100L;
+        }
+        /* image, caption, progress bar, field, buttons in odd states */
+        i = d_add(0, G_IMAGE, DC(18), DR(7), 16, 16);
+        if (i >= 0) dtree[i].ob_spec.bitblk = &dbit;
+        d_str(0, 21, 7, "Disk");
+        k = d_box(0, 26, 7, 8, 1, 0x00FF1100L);
+        if (k >= 0) {
+            i = d_add(k, G_BOX, DC(26), DR(7), DC(5), d_oh);
+            if (i >= 0) dtree[i].ob_spec.index = ncolors >= 4 ? 0x00001172L : 0x00001171L;
+        }
+        d_ted(0, G_FBOXTEXT, 21, 8, 13, "512", "Size: ____K", "9999", 0);
+        d_btn(0, 18, 9, 5, "Copy", OF_SELECTABLE, OS_CROSSED);
+        d_btn(0, 23, 9, 5, "Move", OF_SELECTABLE, OS_DISABLED);
+        d_btn(0, 28, 9, 5, "Del", OF_SELECTABLE, OS_SHADOWED);
+    }
+    if (lvl >= 3) {                                 /* rows 10..12 */
+        /* colour swatches */
+        k = d_add(0, G_IBOX, DC(1), DR(10), DC(16), d_rp + d_oh);
+        for (j = 0; j < 16; j++) {
+            i = d_add(k, G_BOX, DC(1 + 2 * (j & 7)), DR(10 + (j >> 3)), DC(2), d_oh);
+            if (i >= 0) dtree[i].ob_spec.index = 0x00011170L | (j % (ncolors > 16 ? 16 : ncolors));
+        }
+        /* boxes nested four deep */
+        p = 0;
+        for (j = 0; j < 3 && p >= 0; j++) {
+            short v = d_add(p, G_BOX, DC(1) + 3 * j, DR(12) + j, DC(16) - 6 * j, d_oh - 2 * j);
+            if (v >= 0) dtree[v].ob_spec.index = 0x00FF1100L | (j == 1 ? 0x10 : 0);
+            p = v;
+        }
+        if (p >= 0) d_ted_px(p, G_BOXTEXT, DC(1) + 9, DR(12) + 3, DC(16) - 18, d_oh - 6 > 1 ? d_oh - 6 : 1,
+                             "deep", "", "", 5, 2, 0);
+        /* tabs and a tab panel */
+        for (j = 0; j < 4; j++) {
+            static const char *const tn[4] = { "Gen", "Scr", "Fnt", "Net" };
+            d_ted(0, G_BOXTEXT, 18 + 4 * j, 10, 4, tn[j], "", "", j == 1 ? OS_SELECTED : 0);
+        }
+        k = d_box(0, 18, 11, 16, 2, 0x00FF1100L);
+        d_ted(k, G_FTEXT, 19, 11, 7, "640", "W: ____", "9999", 0);
+        d_ted(k, G_FTEXT, 19, 12, 7, "400", "H: ____", "9999", 0);
+        for (j = 0; j < 6; j++) {
+            i = d_add(k, G_BOX, DC(27 + 2 * (j % 3)), DR(11 + j / 3), DC(1), d_oh);
+            if (i >= 0) {
+                dtree[i].ob_spec.index = 0x00FF1100L;
+                dtree[i].ob_flags = OF_SELECTABLE;
+                dtree[i].ob_state = (j & 1) ? OS_CROSSED : OS_SELECTED;
+            }
+        }
+    }
+    }
+    /* exit buttons on the last row */
+    d_ok = d_btn(0, 4, br, 8, "OK", OF_SELECTABLE | OF_DEFAULT | OF_EXIT, 0);
+    d_btn(0, 13, br, 8, "Cancel", OF_SELECTABLE | OF_EXIT, 0);
+    d_btn(0, 22, br, 8, "Help", OF_SELECTABLE | OF_EXIT, 0);
+    dtree[dn - 1].ob_flags |= OF_LASTOB;
+
+    if (mode) sprintf(cur_note, "%d obj, x mod 16 = %d", dn & 255, x0 & 15);
+    else      sprintf(cur_note, "%d objects", dn);
+    fb_update(1);
+    if (!mouse_vis) graf_mouse(M_OFF, NULL);
+}
+static void b_dialog(void)
+{
+    if (d_ok >= 0) dtree[d_ok].ob_state = (tog++ & 1) ? OS_SELECTED : 0;
+    objc_draw_grect(dtree, 0, 8, &tw_area);
+}
+
 static void b_mkstate(void) { short x, y, b, k; graf_mkstate(&x, &y, &b, &k); }
 static void b_gmouse(void)  { graf_mouse(M_OFF, NULL); graf_mouse(M_ON, NULL); }
 static void b_evpoll(void)  { drain_events(); }
@@ -902,10 +1328,15 @@ static void b_msg(void)
     if (!ping_seen) { test_fail = 1; strcpy(cur_note, "message lost"); }
 }
 static void b_menubar(void) { menu_bar(menu_tree, 1); }
+/* The redraw area comes from rpts, so all of it is inside the test area:
+   the TOS 1.x AES does not clip a form_dial redraw to the screen, and an
+   area hanging off the bottom made it fill the desktop pattern past the end
+   of screen memory (crash after test 30 on TOS 1.x). */
 static void b_fdial(void)
 {
-    short k = NX();
-    form_dial(FMD_FINISH, 0, 0, 0, 0, pts[k][0] & ~15, pts[k][1], 64, 48);
+    short k = NX(), x = rpts[k][0] & ~15;
+    if (x < ax) x += 16;                 /* rpts keeps 16 px spare for this */
+    form_dial(FMD_FINISH, 0, 0, 0, 0, x, rpts[k][1], 64, 48);
     drain_events();
 }
 
@@ -1052,12 +1483,17 @@ TEST tests[] = {
  { A, "AES.INFO",    "Set info line",           NULL, aux_open,   b_winfo,   aux_destroy, 0 },
  { A, "AES.SLIDER",  "Set slider pos+size",     NULL, aux_open,   b_wslide,  aux_destroy, 0 },
  { A, "AES.SCROLL",  "Scroll window content",   NULL, s_wscroll,  b_wscroll, c_wscroll, 0 },
+ { A, "AES.SCRSL",   "Scroll window + slider",  NULL, s_wscrsl,   b_ascroll, c_ascr, 0 },
  { A, "AES.WGET",    "wind_get work area",      NULL, NULL,       b_wget,    NULL, 0 },
  { A, "AES.RECTS",   "Rectangle list walk",     NULL, NULL,       b_wrect,   NULL, 0 },
  { A, "AES.CALC",    "wind_calc",               NULL, NULL,       b_wcalc,   NULL, 0 },
  { A, "AES.UPDATE",  "wind_update pair",        NULL, NULL,       b_wupd,    NULL, 0 },
  { A, "AES.OBJDRAW", "objc_draw dialog",        NULL, s_objc,     b_objc,    c_objc, 0 },
  { A, "AES.OBJFIND", "objc_find",               NULL, s_objc,     b_ofind,   c_objc, 0 },
+ { A, "AES.DLG1",    "Dialog draw, medium",     NULL, s_dialog,   b_dialog,  c_objc, 1 },
+ { A, "AES.DLG2",    "Dialog draw, complex",    NULL, s_dialog,   b_dialog,  c_objc, 2 },
+ { A, "AES.DLG3",    "Dialog draw, very complex",NULL, s_dialog,  b_dialog,  c_objc, 3 },
+ { A, "AES.DLG4",    "Dialog draw, pathological",NULL, s_dialog,  b_dialog,  c_objc, 4 },
  { A, "AES.FDIAL",   "form_dial redraw 64x48",  NULL, NULL,       b_fdial,   NULL, 0 },
  { A, "AES.MENU",    "Menu bar redraw",         NULL, NULL,       b_menubar, NULL, 0 },
  { A, "AES.MKSTATE", "graf_mkstate",            NULL, NULL,       b_mkstate, NULL, 0 },
@@ -1086,6 +1522,30 @@ TEST tests[] = {
  { L, "ALN.WOPEN.U", "Open/close win, off-grid",NULL, s_aopen_u, b_wopen,  aux_destroy, 0 },
  { L, "ALN.WSCR.A",  "Scroll window, aligned",  NULL, s_ascr_a, b_ascroll, c_ascr, 0 },
  { L, "ALN.WSCR.U",  "Scroll window, off-grid", NULL, s_ascr_u, b_ascroll, c_ascr, 0 },
+ { L, "ALN.WD.R0.A", "Scroll right, grid",       NULL, s_wdir,   b_wdir,    c_ascr, 17 },
+ { L, "ALN.WD.R0.U", "Scroll right, off-grid",   NULL, s_wdir,   b_wdir,    c_ascr, 33 },
+ { L, "ALN.WD.R1.A", "Scroll right+bar, grid",   NULL, s_wdir,   b_wdir,    c_ascr, 25 },
+ { L, "ALN.WD.R1.U", "Scroll right+bar, off-grid", NULL, s_wdir,   b_wdir,    c_ascr, 41 },
+ { L, "ALN.WD.L0.A", "Scroll left, grid",        NULL, s_wdir,   b_wdir,    c_ascr, 18 },
+ { L, "ALN.WD.L0.U", "Scroll left, off-grid",    NULL, s_wdir,   b_wdir,    c_ascr, 34 },
+ { L, "ALN.WD.L1.A", "Scroll left+bar, grid",    NULL, s_wdir,   b_wdir,    c_ascr, 26 },
+ { L, "ALN.WD.L1.U", "Scroll left+bar, off-grid", NULL, s_wdir,   b_wdir,    c_ascr, 42 },
+ { L, "ALN.WD.D0.A", "Diag dn-rt, grid",         NULL, s_wdir,   b_wdir,    c_ascr, 19 },
+ { L, "ALN.WD.D0.U", "Diag dn-rt, off-grid",     NULL, s_wdir,   b_wdir,    c_ascr, 35 },
+ { L, "ALN.WD.D1.A", "Diag dn-rt+bar, grid",     NULL, s_wdir,   b_wdir,    c_ascr, 27 },
+ { L, "ALN.WD.D1.U", "Diag dn-rt+bar, off-grid", NULL, s_wdir,   b_wdir,    c_ascr, 43 },
+ { L, "ALN.WD.U0.A", "Diag up-lt, grid",         NULL, s_wdir,   b_wdir,    c_ascr, 20 },
+ { L, "ALN.WD.U0.U", "Diag up-lt, off-grid",     NULL, s_wdir,   b_wdir,    c_ascr, 36 },
+ { L, "ALN.WD.U1.A", "Diag up-lt+bar, grid",     NULL, s_wdir,   b_wdir,    c_ascr, 28 },
+ { L, "ALN.WD.U1.U", "Diag up-lt+bar, off-grid", NULL, s_wdir,   b_wdir,    c_ascr, 44 },
+ { L, "ALN.DLG1.A",  "Medium dialog, aligned",  NULL, s_dialog, b_dialog,  c_objc, 17 },
+ { L, "ALN.DLG1.U",  "Medium dialog, x+3",      NULL, s_dialog, b_dialog,  c_objc, 33 },
+ { L, "ALN.DLG2.A",  "Complex dialog, aligned", NULL, s_dialog, b_dialog,  c_objc, 18 },
+ { L, "ALN.DLG2.U",  "Complex dialog, x+3",     NULL, s_dialog, b_dialog,  c_objc, 34 },
+ { L, "ALN.DLG3.A",  "V.complex dlg, aligned",  NULL, s_dialog, b_dialog,  c_objc, 19 },
+ { L, "ALN.DLG3.U",  "V.complex dlg, x+3",      NULL, s_dialog, b_dialog,  c_objc, 35 },
+ { L, "ALN.DLG4.A",  "Patholog. dlg, aligned",  NULL, s_dialog, b_dialog,  c_objc, 20 },
+ { L, "ALN.DLG4.U",  "Patholog. dlg, x+3",      NULL, s_dialog, b_dialog,  c_objc, 36 },
 
  /* Full-screen windows ---------------------------------------------- */
  { F, "FULL.OPEN",   "Open/close full window",  NULL, s_full_closed, b_wopen,      aux_destroy, 0 },
@@ -1332,7 +1792,7 @@ short run_tests(short all)
             drain_events();
             if (needs_front(i) && !fb_in_front()) {
                 res[i].state = RS_NA;
-                strcpy(res[i].note, "skipped: Fbench in background");
+                strcpy(res[i].note, "skipped: in background");   /* note[] is 28 */
                 continue;
             }
         }

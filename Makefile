@@ -21,7 +21,7 @@ STRIP   = $(CROSS)strip
 CFLAGS  = -m68000 -O2 -fomit-frame-pointer -Wall
 LDLIBS  = -lgem
 
-SRCS    = fbench.c tests.c sysinfo.c report.c pdf.c pdfrep.c cpu.c
+SRCS    = fbench.c tests.c sysinfo.c report.c pdf.c pdfrep.c cpu.c refbase.c
 OBJS    = $(SRCS:%.c=obj/%.o)
 DOBJS   = $(SRCS:%.c=obj-debug/%.o)
 
@@ -51,6 +51,10 @@ $(DEBUG): $(DOBJS) version.c VERSION BUILD
 	 $(CC) $(CFLAGS) -DFB_DEBUG=1 -DFB_VER='"'$$(cat VERSION)'"' -DFB_BUILD=$$b -c version.c -o obj-debug/version.o
 	$(CC) $(CFLAGS) -o $@ $(DOBJS) obj-debug/version.o $(LDLIBS)
 	$(STRIP) $@
+
+# the built-in baseline (A): regenerated when the profile changes
+refbase.c: baseline/STE16BLT.FBP tools/mkref.sh
+	sh tools/mkref.sh $< > $@
 
 obj/%.o: %.c fbench.h pdf.h
 	@mkdir -p obj
