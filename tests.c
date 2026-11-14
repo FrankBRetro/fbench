@@ -104,10 +104,26 @@ void fb_step(const char *s)
 #endif
 }        /* >0: stop after this many operations */
 
+/* The first operation of a test is done once, untimed: it can include
+   one-off costs - a GDOS building and caching the glyphs of a new size
+   (XGDOS: ~1.2 s on an STE, then ~0.08 s a line), loading, first-touch -
+   that would otherwise land in, or even fill, a 1 s measurement and make
+   runs differ wildly.  Its time is kept; if it was much slower than the
+   operations after it, the note says so ("1st op 1.25 s"). */
+static long first_ticks, first_slow;
+
 static long time_test(void (*body)(void))
 {
     long n = 0, batch = 1, i, t0, t, el;
 
+    first_ticks = first_slow = 0;
+    if (max_iter <= 0) {                /* limited tests (font load) aren't repeated */
+        t0 = hz200();
+        body();
+        first_ticks = hz200() - t0;
+        if (step_on && ++step_op >= 16) step_on = 0;
+        if (test_fail) return -1;
+    }
     t0 = hz200();
     while ((t = hz200()) == t0)        /* start on a tick edge */
         ;
@@ -127,6 +143,8 @@ static long time_test(void (*body)(void))
         if (el < dur_ticks / 8) batch <<= 1;
     }
     if (el < 1) el = 1;
+    /* first op much slower than the rest (and at least 50 ms)? */
+    if (n > 0 && first_ticks >= 10 && first_ticks * n > 4 * el) first_slow = 1;
     if (n < 1000000L) return n * 2000L / el;
     return (n / el) * 2000L;
 }
@@ -172,9 +190,10 @@ static void clear_area(void)
     vsf_color(bh, 1);
 }
 
-static void area_setup(void)
+static void area_setup(short test)
 {
     short p[4], i, rmax;
+    const char *k;
 
     ax = tw_area.g_x; ay = tw_area.g_y; aw = tw_area.g_w; ah = tw_area.g_h;
     /* never draw outside the screen work area */
@@ -182,6 +201,11 @@ static void area_setup(void)
     if (ay + ah > desk.g_y + desk.g_h) ah = desk.g_y + desk.g_h - ay;
     p[0] = ax; p[1] = ay; p[2] = ax + aw - 1; p[3] = ay + ah - 1;
     vs_clip(bh, 1, p);
+    /* the points cover the whole window, as before; the sequence is
+       seeded from the test's key, so it doesn't depend on which tests ran
+       first and every run of a test (long run) draws the same things */
+    seed = 0x46424E43UL;
+    for (k = tests[test].key; *k; k++) seed = seed * 31UL + (unsigned char)*k;
     rmax = (aw < ah ? aw : ah) / 4;
     if (rmax < 8) rmax = 8;
     for (i = 0; i < 256; i++) {
@@ -498,8 +522,9 @@ static void aux_create(short open)
     if (r.g_h < 6 * box_h)  r.g_h = 6 * box_h;
     if (aux_align == 3)
         r = desk;
-    else if (aux_align) {
-        /* place the WORK area: left edge on a 16 pixel (word) boundary,
+    else {
+        /* place the WORK area: left edge on a 16 pixel (word) boundary
+           (also the default, so every machine gets the same alignment),
            or deliberately 5 pixels past one; width a multiple of 16 */
         GRECT w = r;
         w.g_x = ((w.g_x + 15) & ~15) + (aux_align == 2 ? 5 : 0);
@@ -1752,9 +1777,11 @@ static void repair_area(const GRECT *a)
     form_dial(FMD_FINISH, 0, 0, 0, 0, a->g_x, a->g_y, a->g_w, a->g_h);
 }
 
+static long lr_sum[MAX_TESTS];          /* long run: sum of the runs */
+
 short run_tests(short all)
 {
-    short i, n = 0, done = 0, hide, aes, front, covered;
+    short i, n = 0, done = 0, hide, aes, front, covered, pass, npass = long_run ? LONG_RUNS : 1;
     char info[100];
     long sc;
 
@@ -1763,6 +1790,13 @@ short run_tests(short all)
         form_alert(1, "[1][Fbench:|No tests are selected.|Click the boxes in the|results window.][ OK ]");
         return 0;
     }
+    if (npass > 1) {
+        char a[160];
+        long mins = (long)n * dur_ticks * npass / (200L * 60) + 1;
+        sprintf(a, "[2][Fbench long run:|%d tests, %d times each -|at least %ld minutes.|Esc stops (keeps the runs|done so far).][ Start |Cancel]",
+                n, npass, mins);
+        if (form_alert(1, a) != 1) return 0;
+    }
     if (!bench_open()) return 0;
     pens_update();                      /* palette may have changed since */
     busy = 1; abort_run = 0;
@@ -1770,10 +1804,31 @@ short run_tests(short all)
     results_hide();
     if (!testwin_open()) { busy = 0; busy_mouse(0); results_show(); bench_close(); return 0; }
 
-    for (i = 0; i < ntests && !abort_run && !quit_app; i++) {
+    for (i = 0; i < ntests; i++)
+        if (all || res[i].sel) { res[i].runs = 0; res[i].smin = res[i].smax = -1; lr_sum[i] = 0; }
+
+    /* a long run repeats the whole selection, so slow drifts (other
+       programs, caches, temperature) show up as a swing between runs */
+    for (pass = 0; pass < npass && !abort_run && !quit_app; pass++)
+    for (i = 0, done = 0; i < ntests && !abort_run && !quit_app; i++) {
         if (!all && !res[i].sel) continue;
+        /* Every pass starts from the same GDOS state: a fresh benchmark
+           workstation with its fonts loaded again, as at the start of a
+           single run.  Some GDOS versions change state after fonts are
+           loaded and unloaded (XGDOS drew text ~10x faster afterwards). */
+        if (pass > 0 && done == 0) {
+            bench_close();
+            if (!bench_open()) { abort_run = 1; break; }
+        }
+        /* Load+unload fonts changes the GDOS state for the tests after it,
+           so in a long run it runs once, in the last pass (it is the last
+           test, so nothing is measured after it) */
+        if (npass > 1 && pass < npass - 1 && !strcmp(tests[i].key, "GDOS.LOAD")) { done++; continue; }
         done++;
-        sprintf(info, " %d/%d  %s   (Esc stops)", done, n, tests[i].name);
+        if (npass > 1)
+            sprintf(info, " Run %d/%d  %d/%d  %s   (Esc stops)", pass + 1, npass, done, n, tests[i].name);
+        else
+            sprintf(info, " %d/%d  %s   (Esc stops)", done, n, tests[i].name);
         set_test_info(info);
         cur_run = i;
         results_changed();
@@ -1809,7 +1864,7 @@ short run_tests(short all)
            test window content is disposable, so cursor trails don't matter */
         hide = !mouse_vis && tests[i].group != GRP_AES;
         if (hide) graf_mouse(M_OFF, NULL);
-        area_setup();
+        area_setup(i);
         clear_area();
         if (aes) fb_update(0);
         cur_note[0] = 0;
@@ -1830,9 +1885,25 @@ short run_tests(short all)
             repair_area(&tw_area);
 
         res[i].blit = blitter_on;
+        if (first_slow) {                       /* one-off cost of the first op */
+            char fs[48];
+            sprintf(fs, "1st op %ld.%02ld s", first_ticks / 200, (first_ticks % 200) / 2);
+            if (!cur_note[0]) strcpy(cur_note, fs);
+            else if (strlen(cur_note) + 2 + strlen(fs) < sizeof(cur_note)) {
+                strcat(cur_note, ", "); strcat(cur_note, fs);
+            }
+        }
         strcpy(res[i].note, cur_note);
-        if (sc < 0) { res[i].state = RS_FAIL; res[i].score = -1; }
-        else        { res[i].state = RS_OK;   res[i].score = sc; }
+        if (sc < 0) { res[i].state = RS_FAIL; res[i].score = -1; res[i].runs = 0; }
+        else if (pass == 0 || res[i].runs == 0) {
+            res[i].state = RS_OK; res[i].score = sc;
+            lr_sum[i] = sc; res[i].smin = res[i].smax = sc; res[i].runs = 1;
+        } else if (res[i].state == RS_OK) {         /* average of the runs so far */
+            lr_sum[i] += sc; res[i].runs++;
+            if (sc < res[i].smin) res[i].smin = sc;
+            if (sc > res[i].smax) res[i].smax = sc;
+            res[i].score = lr_sum[i] / res[i].runs;
+        }
         drain_events();
     }
     cur_run = -1;

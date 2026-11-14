@@ -135,6 +135,96 @@ static void hbar(REP *r, short x, short w, long v, long scale, short h, short cr
     pdf_rect(r->p, x, r->y - h + 2, bw, h, cr, cg, cb);
 }
 
+/* "280x faster", "35% faster", "about the same speed", "2.5x slower" */
+static void speed_words(char *o, long pct)
+{
+    if (pct >= 1000)     sprintf(o, "%ldx faster", pct / 100);
+    else if (pct >= 200) sprintf(o, "%ld.%ldx faster", pct / 100, (pct % 100) / 10);
+    else if (pct >= 105) sprintf(o, "%ld%% faster", pct - 100);
+    else if (pct > 95)   strcpy(o, "about the same speed");
+    else if (pct <= 0)   strcpy(o, "too slow to measure against it");
+    else {
+        long x = 10000L / pct;                      /* slower: how many times */
+        if (x >= 1000)     sprintf(o, "%ldx slower", x / 100);
+        else if (x >= 200) sprintf(o, "%ld.%ldx slower", x / 100, (x % 100) / 10);
+        else               sprintf(o, "%ld%% slower", 100 - pct);
+    }
+}
+
+/* a conclusion line: "VDI primitives:" in bold, the rest plain */
+static void bold_line(REP *r, const char *s)
+{
+    const char *c = strchr(s, ':');
+    char lead[64];
+    short lw = c ? (short)(c - s + 1) : 0;
+    need(r, 16);
+    if (lw > 0 && lw < (short)sizeof(lead) && c[1]) {
+        memcpy(lead, s, lw); lead[lw] = 0;
+        pdf_text(r->p, LM + 8, r->y, PF_HELVB, 10, lead, 20, 20, 20);
+        pdf_text(r->p, LM + 8 + pdf_textw(PF_HELVB, 10, lead) + 4, r->y, PF_HELV, 10, c + 2, 20, 20, 20);
+    } else
+        pdf_text(r->p, LM + 8, r->y, PF_HELV, 10, s, 20, 20, 20);
+    r->y += 15;
+}
+
+/* where split_bar splits for pct */
+static short split_pos(short w, long pct)
+{
+    short bw;
+    if (pct < 0) pct = 0;
+    bw = (short)(100L * w / (100L + pct));
+    if (bw < 1) bw = 1;
+    if (bw > w - 1) bw = w - 1;
+    return bw;
+}
+
+/* long run: a black line from x1 to x2 (either order) with end ticks */
+static void range_mark(REP *r, short x1, short x2, short y)
+{
+    if (x2 < x1) { short k = x1; x1 = x2; x2 = k; }
+    if (x2 - x1 < 2) { x1--; x2++; }
+    pdf_line(r->p, x1, y, x2, y, 1, 0, 0, 0);
+    pdf_line(r->p, x1, y - 2, x1, y + 2, 1, 0, 0, 0);
+    pdf_line(r->p, x2, y - 2, x2, y + 2, 1, 0, 0, 0);
+}
+
+/* long run: how repeatable the results are */
+short consistency_lines(char (*lines)[CONC_W], short max)
+{
+    short i, k, n = 0, cnt = 0, c1 = 0, c5 = 0, top[5], nt = 0, runs = 0;
+    long sum = 0, topv[5], d, u, m;
+
+    for (i = 0; i < ntests; i++) {
+        if (!swing_of(&res[i], &d, &u)) continue;
+        m = d > u ? d : u;                          /* tenths of a percent */
+        cnt++; sum += m;
+        if (res[i].runs > runs) runs = res[i].runs;
+        if (m <= 10) c1++;
+        else if (m <= 50) c5++;
+        /* keep the 5 most variable */
+        if (nt < 5) k = nt++;
+        else if (m > topv[4]) k = 4;
+        else continue;
+        topv[k] = m; top[k] = i;
+        while (k > 0 && topv[k] > topv[k - 1]) {
+            long tv = topv[k]; short ti = top[k];
+            topv[k] = topv[k - 1]; top[k] = top[k - 1];
+            topv[k - 1] = tv; top[k - 1] = ti; k--;
+        }
+    }
+    if (!cnt || max < 4 + nt) return 0;
+    sprintf(lines[n++], "Tests: %d, %d runs each", cnt, runs);
+    sprintf(lines[n++], "Swing within 1%%: %d tests; 1-5%%: %d; over 5%%: %d", c1, c5, cnt - c1 - c5);
+    sprintf(lines[n++], "Average largest swing: %ld.%ld%%", sum / cnt / 10, sum / cnt % 10);
+    sprintf(lines[n++], "Most variable:");
+    for (k = 0; k < nt; k++) {
+        char sw[40];
+        swing_str(sw, &res[top[k]]);
+        sprintf(lines[n++], "    %s: %s", tests[top[k]].name, sw);
+    }
+    return n;
+}
+
 /* two-colour bar: the baseline's share (left) against this machine's
    (right), split where they meet - past the middle = this one is faster.
    pct = this machine as % of the baseline */
@@ -185,7 +275,7 @@ static void sys_block(REP *r)
 short blit_report(const char *path, const RESULT *off, const RESULT *on)
 {
     REP R, *r = &R;
-    char t[320], a[24], b[24];
+    char t[320], a[40], b[24];
     short g, i;
     long gsum[NGROUPS], gcnt[NGROUPS], best_i[10], best_v[10];
     short nbest = 0;
@@ -294,9 +384,9 @@ short blit_report(const char *path, const RESULT *off, const RESULT *on)
         pdf_text_r(r->p, 320, r->y, PF_HELVB, 8, "On (ops/s)", 80, 80, 80);
         pdf_text_r(r->p, 370, r->y, PF_HELVB, 8, "Speed-up", 80, 80, 80);
         pdf_rect(r->p, 385, r->y - 7, 8, 7, 160, 160, 160);
-        pdf_text(r->p, 396, r->y, PF_HELV, 7, "off", 80, 80, 80);
-        pdf_rect(r->p, 418, r->y - 7, 8, 7, 31, 119, 180);
-        pdf_text(r->p, 429, r->y, PF_HELV, 7, "on", 80, 80, 80);
+        pdf_text(r->p, 396, r->y, PF_HELV, 7, "blitter off", 80, 80, 80);
+        pdf_rect(r->p, 440, r->y - 7, 8, 7, 31, 119, 180);
+        pdf_text(r->p, 451, r->y, PF_HELV, 7, "blitter on", 80, 80, 80);
         r->y += 5;
         pdf_line(r->p, LM, r->y, RM, r->y, 1, 200, 200, 200);
         r->y += 11;
@@ -322,13 +412,60 @@ short blit_report(const char *path, const RESULT *off, const RESULT *on)
                            pct >= 105 ? 130 : (pct <= 95 ? 40 : 60),
                            pct >= 105 ? 34 : (pct <= 95 ? 40 : 60));
             }
-            r->y = row - 5;                     /* two 4 pt bars inside the row */
-            if (off[i].state == RS_OK) hbar(r, 385, 170, off[i].score, mx, 4, 160, 160, 160);
-            r->y = row;
-            if (on[i].state == RS_OK)  hbar(r, 385, 170, on[i].score, mx, 4, 31, 119, 180);
+            /* the same two-colour line as the Results report: off's share
+               on the left, on's on the right, split where they meet - past
+               the middle, the blitter helps */
+            if (off[i].state == RS_OK && on[i].state == RS_OK && off[i].score > 0) {
+                split_bar(r, 385, row - 8, 170, 8, on[i].score * 100L / off[i].score,
+                          160, 160, 160, 31, 119, 180);
+                pdf_line(r->p, 385 + 85, row - 9, 385 + 85, row + 1, 1, 255, 255, 255);
+            }
             r->y = row + 13;
         }
         r->y += 6;
+    }
+
+    /* conclusion */
+    {
+        long tsum = 0, bestp = 0, worstp = 0;
+        short tcnt = 0, best = -1, worst = -1, same = 0, k;
+        static char cl[NGROUPS + 5][CONC_W];
+        short nl = 0;
+        for (g = 0; g < NGROUPS; g++) {
+            if (!gcnt[g]) continue;
+            speed_words(a, gsum[g] / gcnt[g]);
+            sprintf(cl[nl++], "%s: %s, %ld tests", group_name[g], a, gcnt[g]);
+            tsum += gsum[g]; tcnt += (short)gcnt[g];
+        }
+        for (i = 0; i < ntests; i++) {
+            long pct;
+            if (off[i].state != RS_OK || on[i].state != RS_OK || off[i].score <= 0) continue;
+            pct = on[i].score * 100L / off[i].score;
+            if (pct > 95 && pct < 105) same++;
+            if (best < 0 || pct > bestp)   { best = i; bestp = pct; }
+            if (worst < 0 || pct < worstp) { worst = i; worstp = pct; }
+        }
+        if (tcnt) {
+            speed_words(a, tsum / tcnt);
+            sprintf(cl[nl++], "Overall: %s, %d tests", a, tcnt);
+            if (best >= 0 && bestp >= 105) {
+                speed_words(a, bestp);
+                sprintf(cl[nl++], "Biggest gain: %s, %s", tests[best].name, a);
+            }
+            if (worst >= 0 && worstp <= 95) {
+                speed_words(a, worstp);
+                sprintf(cl[nl++], "Biggest loss: %s, %s", tests[worst].name, a);
+            }
+            sprintf(cl[nl++], "No real difference (within 5%%): %d of %d tests", same, tcnt);
+            need(r, 70 + 15 * nl);              /* keep the block on one page */
+            heading(r, "Conclusion");
+            para(r, "With the blitter on, compared with it off, this machine is:", 10);
+            r->y += 4;
+            for (k = 0; k < nl; k++) bold_line(r, cl[k]);
+            r->y += 4;
+            para(r, "Group figures are the mean of the per-test speed-ups, as in the summary at the "
+                    "start.", 8);
+        }
     }
 
     heading(r, "Notes");
@@ -344,22 +481,6 @@ short blit_report(const char *path, const RESULT *off, const RESULT *on)
 /* ================================================================== */
 /*  1b. This machine: results + configuration (no baseline needed)    */
 /* ================================================================== */
-
-/* "280x faster", "35% faster", "about the same speed", "2.5x slower" */
-static void speed_words(char *o, long pct)
-{
-    if (pct >= 1000)     sprintf(o, "%ldx faster", pct / 100);
-    else if (pct >= 200) sprintf(o, "%ld.%ldx faster", pct / 100, (pct % 100) / 10);
-    else if (pct >= 105) sprintf(o, "%ld%% faster", pct - 100);
-    else if (pct > 95)   strcpy(o, "about the same speed");
-    else if (pct <= 0)   strcpy(o, "too slow to measure against it");
-    else {
-        long x = 10000L / pct;                      /* slower: how many times */
-        if (x >= 1000)     sprintf(o, "%ldx slower", x / 100);
-        else if (x >= 200) sprintf(o, "%ld.%ldx slower", x / 100, (x % 100) / 10);
-        else               sprintf(o, "%ld%% slower", 100 - pct);
-    }
-}
 
 /* The same averages as the group summary (mean of the per-test %), then
    the overall figure and the tests furthest ahead and behind. */
@@ -451,9 +572,21 @@ short machine_report(const char *path)
             run, ntests, dur_ticks / 200, (dur_ticks % 200) / 20,
             b ? "; % compares with the loaded baseline." : ". Bars compare tests within each group.");
     para(r, t, 9);
+    {
+        short runs = 0;
+        for (k = 0; k < ntests; k++) if (res[k].state == RS_OK && res[k].runs > runs) runs = res[k].runs;
+        if (runs > 1) {
+            sprintf(t, "Long run: every test was run %d times; ops/s is the average of the runs. The "
+                       "Note column gives the slowest and fastest run against the average, and a black "
+                       "line across the bar spans the slowest to the fastest run. See Consistency at the end.",
+                    runs);
+            para(r, t, 9);
+        }
+    }
     if (b) {
         GEOM me;
-        sprintf(t, "Baseline %c: %s  [%s]", 'A' + active_base, b->name, b->file);
+        sprintf(t, "Baseline %c: %s  [%s]%s", 'A' + active_base, b->name, b->file,
+                b->runs > 1 ? "  (long run)" : "");
         para(r, t, 9);
         this_geom(&me);
         /* two shorter paragraphs: the whole sentence could exceed t[] */
@@ -466,6 +599,14 @@ short machine_report(const char *path)
                 b->geo.planes, b->geo.tw, b->geo.th, b->geo.dw, b->geo.dh,
                 b->geo.est ? " (estimated: older profile)" : "");
         para(r, t, 8);
+        if (me.planes != b->geo.planes || me.tw != b->geo.tw || me.th != b->geo.th)
+            para(r, "Not like for like: this machine's screen mode or test window differs from the "
+                    "baseline's, so each test does a different amount of work. Raw % compares the "
+                    "speed you get; Norm % is the fairer comparison of the hardware. For like-for-like "
+                    "numbers, compare profiles made in the same screen mode.", 8);
+        else
+            para(r, "Like for like: same colour planes and test window size as the baseline, so each "
+                    "test does the same work on both machines.", 8);
         para(r, "In the tables, each test has two two-colour bars: the baseline's share in blue "
                 "and this machine's in orange, raw on top and normalised below (paler). The black "
                 "mark is where they meet: right of the middle, this machine is faster.", 8);
@@ -526,6 +667,7 @@ short machine_report(const char *path)
             if (tests[i].group == g && res[i].state != RS_NONE) {
                 any = 1;
                 if (res[i].state == RS_OK && res[i].score > mx) mx = res[i].score;
+                if (res[i].state == RS_OK && res[i].runs > 1 && res[i].smax > mx) mx = res[i].smax;
             }
         if (!any) continue;
         prog_set((short)(15 + g * 60 / NGROUPS), group_name[g]);
@@ -563,8 +705,12 @@ short machine_report(const char *path)
             default:      strcpy(a, "failed"); break;
             }
             pdf_text_r(r->p, b ? BX_OPS : 270, row, PF_COUR, 8, a, res[i].state == RS_OK ? 20 : 180, 20, 20);
-            if (res[i].state == RS_OK && !b)
+            if (res[i].state == RS_OK && !b) {
                 hbar(r, 280, 100, res[i].score, mx, 7, 31, 119, 180);
+                if (res[i].runs > 1 && res[i].smin > 0)
+                    range_mark(r, 280 + (short)(res[i].smin * 100L / mx),
+                               280 + (short)(res[i].smax * 100L / mx), row - 4);
+            }
             if (b) {
                 bv = b->val[i];
                 fmt_score(a, bv);
@@ -582,13 +728,22 @@ short machine_report(const char *path)
                                np < 0 ? 150 : (np >= 100 ? 34 : 40));
                     /* raw on top, normalised below in paler colours */
                     split_bar(r, BX_BAR, row - 10, BX_BARW, 6, pct, 31, 119, 180, 255, 127, 14);
+                    if (res[i].runs > 1 && res[i].smin > 0)      /* long run: slowest .. fastest */
+                        range_mark(r, BX_BAR + split_pos(BX_BARW, res[i].smax * 100L / bv),
+                                   BX_BAR + split_pos(BX_BARW, res[i].smin * 100L / bv), row - 7);
                     split_bar(r, BX_BAR, row - 3, BX_BARW, 6, np, 150, 190, 222, 253, 190, 133);
                     /* the middle: equal speed */
                     pdf_line(r->p, BX_BAR + BX_BARW / 2, row - 11, BX_BAR + BX_BARW / 2, row + 4, 1, 255, 255, 255);
                 }
                 pdf_text(r->p, BX_SCL, row, PF_HELV, 7, norm_label(norm_class(tests[i].key)), 110, 110, 110);
             }
-            pdf_fit(PF_HELV, 7, res[i].note, RM - (b ? BX_NOTE : 385), note, sizeof(note));
+            {
+                char nb[64], sw[40];
+                swing_str(sw, &res[i]);
+                if (sw[0] && res[i].note[0]) sprintf(nb, "%s  %s", sw, res[i].note);
+                else strcpy(nb, sw[0] ? sw : res[i].note);
+                pdf_fit(PF_HELV, 7, nb, RM - (b ? BX_NOTE : 385), note, sizeof(note));
+            }
             pdf_text(r->p, b ? BX_NOTE : 385, row, PF_HELV, 7, note, 110, 110, 110);
             r->y = row + rh;
         }
@@ -608,29 +763,32 @@ short machine_report(const char *path)
         }
         r->y += 10;
     }
+    /* long run: how repeatable the results are */
+    {
+        static char cl[12][CONC_W];
+        short nl = consistency_lines(cl, 12);
+        if (nl) {
+            need(r, 70 + 15 * nl);              /* keep the block on one page */
+            heading(r, "Consistency (long run)");
+            para(r, "How far each test's slowest and fastest run were from its average. Small swings "
+                    "mean the setup gives repeatable numbers; large ones point at something else "
+                    "running, caches, or a test that depends on timing.", 9);
+            r->y += 4;
+            for (k = 0; k < nl; k++) bold_line(r, cl[k]);
+        }
+    }
+
     /* conclusion, at the end */
     if (b) {
         static char cl[NGROUPS + 4][CONC_W];
         short nl = conclusion_lines(b, cl, NGROUPS + 4);
         if (nl) {
+            need(r, 70 + 15 * nl);              /* keep the block on one page */
             heading(r, "Conclusion");
             sprintf(t, "Compared with baseline %c, %s, this machine is:", 'A' + active_base, b->name);
             para(r, t, 10);
             r->y += 4;
-            for (k = 0; k < nl; k++) {
-                const char *c = strchr(cl[k], ':');
-                char lead[64];
-                short lw = c ? (short)(c - cl[k] + 1) : 0;
-                need(r, 16);
-                if (lw > 0 && lw < (short)sizeof(lead)) {   /* "VDI primitives:" in bold */
-                    memcpy(lead, cl[k], lw); lead[lw] = 0;
-                    pdf_text(r->p, LM + 8, r->y, PF_HELVB, 10, lead, 20, 20, 20);
-                    pdf_text(r->p, LM + 8 + pdf_textw(PF_HELVB, 10, lead) + 4, r->y,
-                             PF_HELV, 10, c + 2, 20, 20, 20);
-                } else
-                    pdf_text(r->p, LM + 8, r->y, PF_HELV, 10, cl[k], 20, 20, 20);
-                r->y += 15;
-            }
+            for (k = 0; k < nl; k++) bold_line(r, cl[k]);
             r->y += 4;
             para(r, "Averages are the mean of the per-test percentages in each group, as in the "
                     "Groups summary at the start; normalised figures allow for colour planes, "

@@ -44,7 +44,8 @@ MENUS  (short titles are used in ST Low)
   Options   Machine description... - free text naming this setup, e.g.
               "FireBee", "MultiTOS", "XGEM"; saved in FBENCH.INF
             Blitter enabled (^B) - switches blitter use (see BLITTER below),
-            test duration 0.5 / 1 / 3 s, Next GDOS font (^F),
+            test duration 0.5 / 1 / 3 s, Long run (10 runs) - see
+            LONG RUN below, Next GDOS font (^F),
             Mouse visible in tests - see below
             Stay in background - see below
   Window    Results, System info (^I)
@@ -128,6 +129,31 @@ CPU
   (e.g. a 68040 board reported as 68020). If the cookie disagrees,
   System info says so. Profiles record CPU=.
 
+SAME STARTING POSITIONS ON EVERY MACHINE
+  The test window's work area starts on a 16 pixel boundary, and so do
+  the windows the AES and scrolling tests open (unless a test puts one
+  off the grid on purpose), so scrolls and blits start at the same bit
+  positions on every machine. Shapes and text still use the whole test
+  window. The random positions and sizes come from a sequence seeded from
+  each test's name, so they don't depend on which tests ran before, and
+  every run of a long run draws the same things.
+
+LONG RUN
+  Options > Long run (10 runs): Run all / Run selected repeats the whole
+  selection 10 times (an alert shows the minimum time first; Esc stops
+  and keeps the runs done so far). Each test then shows the average,
+  and a line across its bar from the slowest to the fastest run. The
+  Results report and Export report give each test's swing (how far the
+  slowest and fastest runs were from the average, e.g. "-1.2% / +0.8%")
+  and a Consistency section: how many tests stayed within 1% and 5%, and
+  the most variable ones. Save profile stores RUNS=10 and, per test, the
+  average followed by the slowest and fastest run; older Fbench versions
+  read just the average.
+  Each run starts from the same GDOS state: the benchmark workstation is
+  opened again and its fonts reloaded before every run, and "Load+unload
+  fonts" (which can change the GDOS's state for the tests after it) runs
+  only once, at the end of the last run.
+
 BUILT-IN BASELINE
   Fbench carries one reference profile inside the program, made on an
   STE with TOS 1.6, the blitter on and XGDOS, in medium resolution
@@ -167,7 +193,10 @@ PDF REPORTS
   Blitter report: the selected tests run twice (blitter off, then on);
   the blitter is then put back as it was. The PDF has the system summary,
   average speed-up per group, the biggest gains, and every test with
-  off/on ops/s, speed-up % and a bar pair. Afterwards the results window
+  off/on ops/s, speed-up % and the same two-colour line as the Results
+  report (blitter off's share in grey, on's in blue; past the middle the
+  blitter helps). It ends with a conclusion in plain words per group,
+  overall, the biggest gain and loss, and how many tests don't change. Afterwards the results window
   shows the blitter-on run against "Blitter off (this run)" as baseline.
   Takes twice as long as a normal run; Esc cancels.
 
@@ -244,6 +273,11 @@ PC GEM (FreeGEM / OpenGEM on DOS)
   licences).
 
 NOTES
+  * Each test does its operation once, untimed, before timing starts, so
+    one-off costs don't land in the 1 s measurement - e.g. XGDOS builds
+    and caches a font size's glyphs the first time it is drawn (about
+    1.2 s on an STE, then ~0.08 s a line). If that first operation was
+    much slower than the rest, the note says so ("1st op 1.25 s").
   * Debug build only (make debug): before each test Fbench writes
     FBLAST.LOG (in the directory it was started from) naming that test;
     it is deleted when a run ends normally. If Fbench crashes, FBLAST.LOG

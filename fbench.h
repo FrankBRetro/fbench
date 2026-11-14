@@ -77,6 +77,8 @@ typedef struct {
     long  score;                /* operations per second x 10           */
     short blit;                 /* blitter state when measured          */
     char  note[28];
+    short runs;                 /* long run: runs averaged into score   */
+    long  smin, smax;           /* long run: slowest / fastest run (x10) */
 } RESULT;
 
 /* what one test operation's work depends on, for normalised results */
@@ -92,6 +94,8 @@ typedef struct {
     char  name[48];             /* NAME= line, or file name             */
     char  file[16];
     long  val[MAX_TESTS];       /* x10, -1 = not in profile             */
+    short runs;                 /* RUNS= : long-run profile, else 0/1    */
+    long  vmin[MAX_TESTS], vmax[MAX_TESTS];   /* long run range, -1 = none */
     GEOM  geo;                  /* that machine's geometry              */
 } BASELINE;
 
@@ -155,7 +159,15 @@ extern TEST   tests[];
 extern short  ntests;
 extern RESULT res[MAX_TESTS];
 extern short  test_fail;
+extern short  long_run;         /* Options > Long run: every test LONG_RUNS times */
+#define LONG_RUNS   10
+/* long run swing of r: how far the slowest / fastest run was below / above
+   the average, in tenths of a percent; 0 = not a long run */
+short swing_of(const RESULT *r, long *down, long *up);
+void  swing_str(char *o, const RESULT *r);        /* "-1.2% / +0.8%" or "" */
 extern short  run_tw_w, run_tw_h;   /* test window work size of the last run */
+/* The test window's work area starts on a 16 px boundary on every machine,
+   so scrolls and blits start at the same bit positions everywhere. */
 extern GRECT  tw_area;          /* work area of the test window         */
 extern FONTREC fonts[MAX_FONTS];
 extern short  nfonts, gdos_loaded, gfont;
@@ -212,6 +224,8 @@ short machine_report(const char *path);
    - fills up to max lines of CONC_W chars, returns the count */
 #define CONC_W 160              /* longest line ~110 */
 short conclusion_lines(const BASELINE *b, char (*lines)[CONC_W], short max);
+/* long run: how repeatable the results are (0 lines if no long run) */
+short consistency_lines(char (*lines)[CONC_W], short max);
 
 /* normalised results (pdfrep.c): ops/s x the work one operation does on
    that machine (planes, test window, desktop), as % of a baseline */

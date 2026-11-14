@@ -44,6 +44,29 @@ static long parse_score(const char *s)
     return got ? v * 10 + f : -1;
 }
 
+/* the next number after the current one on a line ("337.5 330.1 341.2"),
+   -1 = none; older Fbench reads only the first, so profiles stay compatible */
+static const char *skip_num(const char *s)
+{
+    while (*s == ' ' || *s == '\t') s++;
+    while ((*s >= '0' && *s <= '9') || *s == '.') s++;
+    return s;
+}
+
+short swing_of(const RESULT *r, long *down, long *up)
+{
+    if (r->state != RS_OK || r->runs < 2 || r->score <= 0 || r->smin < 0) return 0;
+    *down = (r->score - r->smin) * 1000L / r->score;
+    *up   = (r->smax - r->score) * 1000L / r->score;
+    return 1;
+}
+void swing_str(char *o, const RESULT *r)
+{
+    long d, u;
+    if (!swing_of(r, &d, &u)) { *o = 0; return; }
+    sprintf(o, "-%ld.%ld%% / +%ld.%ld%%", d / 10, d % 10, u / 10, u % 10);
+}
+
 static void trim(char *s)
 {
     short n = (short)strlen(s);
@@ -65,8 +88,13 @@ void baseline_from_results(short slot, const char *name, const RESULT *r)
     BASELINE *b = &base[slot];
     short i;
     memset(b, 0, sizeof(*b));
-    for (i = 0; i < MAX_TESTS; i++)
-        b->val[i] = (i < ntests && r[i].state == RS_OK) ? r[i].score : -1;
+    for (i = 0; i < MAX_TESTS; i++) {
+        short ok = i < ntests && r[i].state == RS_OK;
+        b->val[i] = ok ? r[i].score : -1;
+        b->vmin[i] = ok && r[i].runs > 1 ? r[i].smin : -1;
+        b->vmax[i] = ok && r[i].runs > 1 ? r[i].smax : -1;
+        if (ok && r[i].runs > b->runs) b->runs = r[i].runs;
+    }
     strncpy(b->name, name, sizeof(b->name) - 1);
     strcpy(b->file, "(this run)");
     this_geom(&b->geo);
@@ -164,9 +192,14 @@ short baseline_load(const char *path)
         } else if (!strcmp(line, "PLANES"))  { b->geo.planes = (short)atoi(eq);
         } else if (!strcmp(line, "COLOURS")) { colours = (short)atoi(eq);
         } else if (!strcmp(line, "TESTWIN")) { sscanf(eq, "%hdx%hd", &b->geo.tw, &b->geo.th);
+        } else if (!strcmp(line, "RUNS"))    { b->runs = (short)atoi(eq);
         } else if (!strcmp(line, "DESK"))    { sscanf(eq, "%hdx%hd", &b->geo.dw, &b->geo.dh);
         } else if ((i = find_test(line)) >= 0) {
+            const char *q = skip_num(eq);
             b->val[i] = parse_score(eq);
+            b->vmin[i] = parse_score(q);                 /* long-run profiles: */
+            b->vmax[i] = b->vmin[i] >= 0 ? parse_score(skip_num(q)) : -1;   /* avg min max */
+            if (b->vmax[i] < 0) b->vmin[i] = -1;
             if (b->val[i] >= 0) found++;
         }
     }
@@ -187,9 +220,11 @@ static void date_str(char *buf)
 short profile_save(const char *path)
 {
     FILE *f;
-    char name[64], date[24], v[20];
-    short i, n = 0;
+    char name[64], date[24], v[20], vmn[20], vmx[20];
+    short i, n = 0, runs = 0;
 
+    for (i = 0; i < ntests; i++)
+        if (res[i].state == RS_OK && res[i].runs > runs) runs = res[i].runs;
     /* gather everything first, so a failure never leaves an empty file */
     sysinfo_short(name, sizeof(name));          /* automatic system summary */
     date_str(date);
@@ -209,11 +244,22 @@ short profile_save(const char *path)
     fprintf(f, "PLANES=%d\nCOLOURS=%d\n", planes, ncolors);
     fprintf(f, "DESK=%dx%d\n", desk.g_w, desk.g_h);
     if (run_tw_w > 0) fprintf(f, "TESTWIN=%dx%d\n", run_tw_w, run_tw_h);
+    if (runs > 1) {
+        fprintf(f, "; Long run: each value is the average of the runs, then the\n");
+        fprintf(f, "; slowest and fastest run (older Fbench reads the average only).\n");
+        fprintf(f, "RUNS=%d\n", runs);
+    }
     fprintf(f, "[results]\n");
     for (i = 0; i < ntests; i++) {
         if (res[i].state != RS_OK) continue;
         fmt_score(v, res[i].score);
-        fprintf(f, "%-12s=%-10s ; %s\n", tests[i].key, v, tests[i].name);
+        if (res[i].runs > 1) {
+            char sv[64];
+            fmt_score(vmn, res[i].smin); fmt_score(vmx, res[i].smax);
+            sprintf(sv, "%s %s %s", v, vmn, vmx);
+            fprintf(f, "%-12s=%-26s ; %s (%d runs)\n", tests[i].key, sv, tests[i].name, res[i].runs);
+        } else
+            fprintf(f, "%-12s=%-10s ; %s\n", tests[i].key, v, tests[i].name);
         n++;
     }
     fclose(f);
@@ -258,6 +304,13 @@ short report_export(const char *path)
             blitter_fixed ? " (this TOS cannot switch it off - XBIOS 64 is ignored)" : "");
     fprintf(f, "Duration  : %ld.%ld s per test\n", dur_ticks / 200, (dur_ticks % 200) / 20);
     if (nfonts) fprintf(f, "GDOS font : %s (id %d)\n", fonts[gfont].name, fonts[gfont].id);
+    {
+        short runs = 0;
+        for (i = 0; i < ntests; i++) if (res[i].state == RS_OK && res[i].runs > runs) runs = res[i].runs;
+        if (runs > 1)
+            fprintf(f, "Long run  : %d runs per test - ops/s are averages; [swing] = slowest\n"
+                       "            and fastest run against the average\n", runs);
+    }
     fprintf(f, "\n");
 
     for (i = 0; i < nsys; i++) {
@@ -316,6 +369,11 @@ short report_export(const char *path)
                 strcat(line, cell);
             }
             if (res[i].note[0]) { strcat(line, "  ("); strcat(line, res[i].note); strcat(line, ")"); }
+            {
+                char sw[40];
+                swing_str(sw, &res[i]);
+                if (sw[0]) { strcat(line, "  [swing "); strcat(line, sw); strcat(line, "]"); }
+            }
             fprintf(f, "%s\n", line);
         }
         if (cnt) {
@@ -348,6 +406,12 @@ short report_export(const char *path)
         fprintf(f, "   Baseline %c:   planes %d, test window %dx%d, desktop %dx%d%s\n\n",
                 'A' + active_base, bb->geo.planes, bb->geo.tw, bb->geo.th, bb->geo.dw, bb->geo.dh,
                 bb->geo.est ? " (estimated - older profile)" : "");
+        if (me.planes != bb->geo.planes || me.tw != bb->geo.tw || me.th != bb->geo.th)
+            fprintf(f, "   NOT like for like: different screen mode or test window, so each test\n"
+                       "   does a different amount of work - use Norm %%, or compare profiles\n"
+                       "   made in the same screen mode.\n\n");
+        else
+            fprintf(f, "   Like for like: same planes and test window as the baseline.\n\n");
         fprintf(f, "%-26s %6s %6s %-6s %s\n", "Test", "Raw %", "Norm %", "Scales", "");
         for (i = 0; i < ntests; i++) {
             long bv = bb->val[i], pct, np;
@@ -380,6 +444,16 @@ short report_export(const char *path)
     fprintf(f, "applications keep running and can lower the scores; close them for\n");
     fprintf(f, "repeatable results. Fbench holds the screen (wind_update) while each\n");
     fprintf(f, "test runs. NVDI and other accelerated VDIs may ignore the blitter switch.\n");
+
+    /* long run: how repeatable the results are */
+    {
+        static char cl[12][CONC_W];
+        short nl = consistency_lines(cl, 12);
+        if (nl) {
+            fprintf(f, "\n-- Consistency (long run) --\n");
+            for (i = 0; i < nl; i++) fprintf(f, "  %s\n", cl[i]);
+        }
+    }
 
     /* conclusion, at the end */
     if (base[active_base].used) {

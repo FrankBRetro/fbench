@@ -21,7 +21,7 @@ short blitter_present, blitter_on, blitter_fixed;
 long  dur_ticks = 200;              /* 1 s per test (200 Hz ticks) */
 short multitask;
 short cur_run = -1;
-short magic_present, polite;
+short magic_present, polite, long_run;
 short mouse_vis;                    /* option: pointer stays visible   */
 static short cur_form = ARROW;
 short ping_seen;
@@ -50,6 +50,7 @@ enum {
     C_RUNALL, C_RUNSEL, C_SELALL, C_SELNONE, C_SELVDI, C_SELAES, C_SELALIGN, C_SELFULL, C_SELGDOS,
     C_LOADBASE, C_CLEARBASE, C_BASE0, C_BASE1, C_BASE2, C_BASE3,
     C_BLITTER, C_DSHORT, C_DNORM, C_DLONG, C_NEXTFONT, C_MOUSEVIS, C_POLITE, C_TRACE, C_DESC,
+    C_LONGRUN,
     C_WRESULTS, C_WINFO,
     C_MAX
 };
@@ -98,7 +99,8 @@ static const MITEM m_opts[] = {
     { C_BLITTER,  "  Blitter enabled   ^B" }, SEP,
     { C_DSHORT,   "  Duration: 0.5 s" },
     { C_DNORM,    "  Duration: 1 s" },
-    { C_DLONG,    "  Duration: 3 s" }, SEP,
+    { C_DLONG,    "  Duration: 3 s" },
+    { C_LONGRUN,  "  Long run (10 runs)" }, SEP,
     { C_NEXTFONT, "  Next GDOS font    ^F" }, SEP,
     { C_MOUSEVIS, "  Mouse visible in tests" },
     { C_POLITE,   "  Stay in background" },
@@ -236,6 +238,8 @@ static void update_menu(void)
     m_enable(C_NEXTFONT, nfonts > 1);
     m_check(C_MOUSEVIS, mouse_vis);
     m_check(C_POLITE, polite);
+    m_check(C_LONGRUN, long_run);
+    m_enable(C_LONGRUN, !busy);
     m_enable(C_POLITE, !busy);
     m_check(C_TRACE, trace_steps);
     for (i = 0; i < MAX_BASE; i++) {
@@ -330,13 +334,40 @@ static void build_rows(void)
     wins[WN_RESULTS].rows = nrows;
 }
 
+/* long run swing: a line from the slowest to the fastest run, with end
+   ticks, drawn in XOR so it shows on every fill */
+static void range_line(short x1, short x2, short y, short lh)
+{
+    short p[4], my = y + lh / 2, t = lh / 4;
+    if (x2 < x1) { short k = x1; x1 = x2; x2 = k; }
+    if (x2 - x1 < 2) { x1--; x2++; }
+    vswr_mode(vdi_h, MD_XOR);
+    vsl_color(vdi_h, 1);
+    p[0] = x1; p[1] = my; p[2] = x2; p[3] = my;
+    v_pline(vdi_h, 2, p);
+    p[0] = p[2] = x1; p[1] = my - t; p[3] = my + t;
+    v_pline(vdi_h, 2, p);
+    p[0] = p[2] = x2;
+    v_pline(vdi_h, 2, p);
+    vswr_mode(vdi_h, MD_REPLACE);
+}
+
+static short any_long_run(void)
+{
+    short i;
+    for (i = 0; i < ntests; i++) if (res[i].state == RS_OK && res[i].runs > 1) return 1;
+    return 0;
+}
+
 static long group_max(short g)
 {
     long m = 1;
     short i;
     for (i = 0; i < ntests; i++)
-        if (tests[i].group == g && res[i].state == RS_OK && res[i].score > m)
-            m = res[i].score;
+        if (tests[i].group == g && res[i].state == RS_OK) {
+            if (res[i].score > m) m = res[i].score;
+            if (res[i].runs > 1 && res[i].smax > m) m = res[i].smax;   /* long run */
+        }
     return m;
 }
 
@@ -369,7 +400,7 @@ static void draw_result_row(short r, short x, short y, short w, short lh, const 
 
     if (code == -1) {
         txt(x + L->cname * char_w, ty, "Test", L->wname, 1, 1);
-        txt(x + L->cval * char_w, ty, "    ops/s", 9, 1, 1);
+        txt(x + L->cval * char_w, ty, any_long_run() ? "avg ops/s" : "    ops/s", 9, 1, 1);
         if (base[active_base].used)
             txt(x + L->cpct * char_w, ty, " % ", 5, 1, 1);
         if (L->cols - L->cbar > 4) {
@@ -442,12 +473,21 @@ static void draw_result_row(short r, short x, short y, short w, short lh, const 
                     v_pline(vdi_h, 2, p);   /* where they meet */
                     p[0] = p[2] = bx0 + bw / 2; p[1] = y + lh - 2; p[3] = y + lh / 2 + 1;
                     v_pline(vdi_h, 2, p);   /* the middle: equal speed (half height) */
+                    if (rs->runs > 1 && rs->smin > 0) {
+                        /* long run: the split for the slowest and the fastest run */
+                        short s1 = (short)(100L * bw / (100L + rs->smax * 100L / bv));
+                        short s2 = (short)(100L * bw / (100L + rs->smin * 100L / bv));
+                        range_line(bx0 + s1, bx0 + s2, y, lh);
+                    }
                 }
             } else if (bw > 8) {
                 long m = group_max(tests[code].group);
                 short bl = (short)(rs->score * (long)bw / m);
                 if (rs->score > 0 && bl < 1) bl = 1;
                 bar(bx0, y + 2, bl, bh2, 0);
+                if (rs->runs > 1 && rs->smin > 0)        /* long run: slowest .. fastest */
+                    range_line(bx0 + (short)(rs->smin * (long)bw / m),
+                               bx0 + (short)(rs->smax * (long)bw / m), y, lh);
             }
         }
     }
@@ -935,6 +975,15 @@ short testwin_open(void)
     r.g_h = desk.g_h - box_h - 2;
     if (desk.g_w < 400) {                /* ST low: use most of the screen */
         r.g_x = desk.g_x + box_w; r.g_w = desk.g_w - box_w - 2;
+    }
+    {   /* work area's left edge on a 16 px boundary on every machine, so a
+           test's blits have the same alignment everywhere */
+        GRECT wk;
+        short d;
+        wind_calc_grect(WC_WORK, NAME | INFO | CLOSER, &r, &wk);
+        d = wk.g_x & 15;
+        if (d && r.g_x - d >= desk.g_x) r.g_x -= d;
+        else if (d) { r.g_x += 16 - d; r.g_w -= 16 - d; }
     }
     h = wind_create_grect(NAME | INFO | CLOSER, &r);
     if (h <= 0) {
@@ -1427,6 +1476,10 @@ static void do_cmd(short cmd)
         break;
     case C_POLITE:
         polite = !polite;
+        update_menu();
+        break;
+    case C_LONGRUN:
+        long_run = !long_run;
         update_menu();
         break;
     case C_MOUSEVIS:
