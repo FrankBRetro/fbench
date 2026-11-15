@@ -264,7 +264,10 @@ PC GEM (FreeGEM / OpenGEM on DOS)
   the cookie jar; a PC has no blitter. It needs a 386 or later, a DPMI host
   (CWSDPMI.EXE beside it or on the PATH) and, for the GDOS tests, XGDOS for
   PC GEM (https://github.com/FrankBRetro/xgdos), which gives it Speedo
-  fonts. It uses EdWord's PC GEM layer (../edword/pcgem, or EDPC=...):
+  fonts. It needs OpenGEM or FreeGEM (GEM 3 or later): the original
+  Digital Research GEM 1.x (AES 1.2, 1985) lacks AES calls Fbench uses,
+  so on it Fbench says it isn't supported and quits.
+  It uses EdWord's PC GEM layer (../edword/pcgem, or EDPC=...):
       source ~/work/vibe/PC-GEM/scripts/djgppenv.sh
       make -C pcgem          -> pcgem/FBENCH.APP
   The pre-commit hook builds it too when the DJGPP compiler is on the

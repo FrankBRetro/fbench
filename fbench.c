@@ -1662,6 +1662,9 @@ void drain_events(void)
        pipe.  The dispatcher call (trap #2, d0=201) lets it run first. */
     if (!multitask && _AESversion < 0x0400) {
         fb_step("drain: dispatch (appl_yield)");
+#ifdef PCGEM
+        if (_AESversion >= 0x0300)      /* AES function 17: not in older PC GEMs */
+#endif
         _appl_yield();
     }
     fb_step("drain: evnt_multi");
@@ -1725,6 +1728,20 @@ int main(void)
 
     app_id = appl_init();
     if (app_id < 0) return 1;
+#ifdef PCGEM
+    /* The original Digital Research GEM 1.x for the PC (AES 1.2, 1985)
+       lacks AES calls Fbench needs (it answers them with "Bad Function #")
+       and has no scalable fonts: say so and leave, instead of failing
+       part-way.  OpenGEM / FreeGEM (AES 3 and later) are supported. */
+    if (_AESversion < 0x0200) {
+        char al[200];
+        sprintf(al, "[3][Fbench needs GEM 3 or later|(OpenGEM or FreeGEM, with|XGDOS for the font tests).|This is GEM AES %x.%02x, which|is not supported.][ Quit ]",
+                _AESversion >> 8, _AESversion & 0xff);
+        form_alert(1, al);
+        appl_exit();
+        return 1;
+    }
+#endif
     /* MagiC (any flavour: Atari, MagiC Mac, MagiC PC, MagiCOnLinux) sets the
        MagX cookie; it multitasks whatever global[1] says */
     magic_present = get_cookie(0x4D616758L, NULL);              /* 'MagX' */
