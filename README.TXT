@@ -267,12 +267,20 @@ PC GEM (FreeGEM / OpenGEM on DOS)
   fonts. It needs OpenGEM or FreeGEM (GEM 3 or later): the original
   Digital Research GEM 1.x (AES 1.2, 1985) lacks AES calls Fbench uses,
   so on it Fbench says it isn't supported and quits.
-  It uses EdWord's PC GEM layer (../edword/pcgem, or EDPC=...):
+  On a 256-colour screen (the FreeGEM VESA drivers, e.g. SDW649.VGA) the
+  User line style test can leave a short line outside the test window:
+  the driver draws part of some patterned lines in the wrong place. It
+  doesn't change the timings; GEM redraws the area when it next needs to.
+  The text in Fbench's windows uses the system font the menus use (PC
+  GEM's workstations start with the 8x8 font).
+  The PC GEM layer it builds on (GEMLib-style headers on John Elliott's
+  DJGPP GEM bindings) is in pcgem/:
       source ~/work/vibe/PC-GEM/scripts/djgppenv.sh
       make -C pcgem          -> pcgem/FBENCH.APP
   The pre-commit hook builds it too when the DJGPP compiler is on the
   PATH, and copies it to release/. "make dist" adds
-  fbench-<version>-pcgem.zip (FBENCH.APP, CWSDPMI, this file, the
+  fbench-<version>-pcgem.zip (FBENCH.APP, the STE baseline profile
+  STE16BLT.FBP - also built in as baseline A - CWSDPMI, this file, the
   licences).
 
 NOTES

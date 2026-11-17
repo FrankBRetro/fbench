@@ -5,29 +5,28 @@
 #   make -C pcgem                 -> pcgem/FBENCH.APP
 #
 # Fbench's sources (..) are compiled with -DPCGEM against GEMLib-style
-# headers. The PC GEM layer they need - gem.h / vdi.h / osbind.h and their
-# implementation on John Elliott's DJGPP GEM bindings - is EdWord's
-# (../../edword/pcgem, set EDPC to move it); pcgem/include here adds only
-# Fbench's own gemx.h and mintbind.h.
+# headers in pcgem/include (gem.h, vdi.h, osbind.h, gemx.h, mintbind.h ...),
+# implemented here on John Elliott's DJGPP GEM bindings: pgaes.c and pgvdi.c
+# (trees, strings and bitmaps copied to DOS memory for GEM), pgrsc.c and
+# pgtos.c (the TOS calls, on DOS).
 #
 # Run it with CWSDPMI.EXE beside it or on the PATH; the GDOS tests want
 # XGDOS (XGDOS GEMVDI in GEM.BAT).
 
 DJCC   ?= i586-pc-msdosdjgpp-gcc
 GEMKIT ?= $(HOME)/work/vibe/PC-GEM/tools/djgppgem
-EDPC   ?= ../../edword/pcgem
 GK      = $(GEMKIT)/CONTRIB/GEM
 GKINC   = obj/kitinc
 
 CFLAGS   = -O2 -Wall -std=gnu89 -Wno-address-of-packed-member -DPCGEM \
-           -Iinclude -I$(EDPC)/include -I..
-KITFLAGS = -O2 -Wall -Wno-address-of-packed-member -fgnu89-inline -I$(GKINC) -I$(EDPC)
+           -Iinclude -I..
+KITFLAGS = -O2 -Wall -Wno-address-of-packed-member -fgnu89-inline -I$(GKINC) -I.
 ifdef DEBUG
 CFLAGS  += -DFB_DEBUG=1
 endif
 
 SRCS    = fbench tests sysinfo report pdf pdfrep cpu refbase
-LAYER   = pgrsc pgtos pglinear          # the PC GEM layer, our headers
+LAYER   = pgrsc pgtos pglinear          # the PC GEM layer, GEMLib-style headers
 KITPORT = pgaes pgvdi                   # the PC GEM layer, the kit's headers
 
 OBJS = $(addprefix obj/,$(addsuffix .o,$(SRCS) $(LAYER) $(KITPORT) pclog))
@@ -39,21 +38,20 @@ FBENCH.APP: $(OBJS) ../version.c ../VERSION ../BUILD
 	$(DJCC) -o fbench.exe $(OBJS) obj/version.o $(GK)/LIB/LIBGEM.A
 	cp fbench.exe $@
 
-obj/%.o: ../%.c ../fbench.h ../pdf.h
+obj/%.o: ../%.c ../fbench.h ../pdf.h $(wildcard include/*.h include/mint/*.h)
 	@mkdir -p obj
 	$(DJCC) $(CFLAGS) -c -o $@ $<
-obj/pgrsc.o obj/pgtos.o obj/pglinear.o: obj/%.o: $(EDPC)/%.c
+obj/pgrsc.o obj/pgtos.o obj/pglinear.o: obj/%.o: %.c
 	@mkdir -p obj
 	$(DJCC) $(CFLAGS) -c -o $@ $<
-obj/pgaes.o obj/pgvdi.o: obj/%.o: $(EDPC)/%.c $(EDPC)/pgkit.h $(GKINC)/.fixed
+obj/pgaes.o obj/pgvdi.o: obj/%.o: %.c pgkit.h $(GKINC)/.fixed
 	@mkdir -p obj
 	$(DJCC) $(KITFLAGS) -c -o $@ $<
 obj/pclog.o: pclog.c
 	@mkdir -p obj
 	$(DJCC) $(CFLAGS) -c -o $@ $<
 
-# the kit's headers with their struct packing fixed for current gcc (as
-# EdWord's Makefile does it)
+# the kit's headers with their struct packing fixed for current gcc
 $(GKINC)/.fixed: $(wildcard $(GK)/INCLUDE/*.H)
 	@test -f $(GK)/INCLUDE/DJGPPGEM.H || { echo "DJGPP GEM kit not found: set GEMKIT"; exit 1; }
 	rm -rf $(GKINC); mkdir -p $(GKINC)
@@ -63,7 +61,14 @@ $(GKINC)/.fixed: $(wildcard $(GK)/INCLUDE/*.H)
 	done
 	touch $@
 
+# into DOSBox-X's C: (C:\FBENCH), with CWSDPMI
+PCGEMC ?= $(HOME)/work/vibe/PC-GEM/dos/C
+install: FBENCH.APP
+	mkdir -p $(PCGEMC)/FBENCH
+	cp FBENCH.APP ../baseline/*.FBP $(PCGEMC)/FBENCH/
+	test -f $(PCGEMC)/FBENCH/CWSDPMI.EXE || cp $(HOME)/work/vibe/PC-GEM/tools/cwsdpmi/bin/CWSDPMI.EXE $(PCGEMC)/FBENCH/
+
 clean:
 	rm -rf obj fbench.exe FBENCH.APP
 
-.PHONY: clean
+.PHONY: clean install

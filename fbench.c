@@ -1732,11 +1732,13 @@ int main(void)
     /* The original Digital Research GEM 1.x for the PC (AES 1.2, 1985)
        lacks AES calls Fbench needs (it answers them with "Bad Function #")
        and has no scalable fonts: say so and leave, instead of failing
-       part-way.  OpenGEM / FreeGEM (AES 3 and later) are supported. */
-    if (_AESversion < 0x0200) {
+       part-way.  OpenGEM / FreeGEM (AES 3 and later) are supported.
+       The real version: _AESversion on PC GEM is always 0x0120, the PC GEM
+       layer's way of keeping programs on their most careful paths. */
+    if (pg_aes_version > 0 && pg_aes_version < 0x0200) {
         char al[200];
         sprintf(al, "[3][Fbench needs GEM 3 or later|(OpenGEM or FreeGEM, with|XGDOS for the font tests).|This is GEM AES %x.%02x, which|is not supported.][ Quit ]",
-                _AESversion >> 8, _AESversion & 0xff);
+                pg_aes_version >> 8, pg_aes_version & 0xff);
         form_alert(1, al);
         appl_exit();
         return 1;
@@ -1767,6 +1769,11 @@ int main(void)
     ncolors = work_out[13];
     planes  = ext_out[4];
     vst_alignment(vdi_h, 0, 5, &i, &i);     /* left / top */
+#ifdef PCGEM
+    /* PC GEM's workstation starts with the 8x8 font: the system font the
+     * menus use instead (height 13, which the layer makes PC GEM's 14) */
+    vst_height(vdi_h, char_h >= 16 ? 13 : 6, &i, &i, &i, &i);
+#endif
     vsf_perimeter(vdi_h, 0);
 
     wind_get_grect(0, WF_WORKXYWH, &desk);

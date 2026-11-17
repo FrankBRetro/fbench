@@ -65,7 +65,8 @@ obj-debug/%.o: %.c fbench.h pdf.h
 	$(CC) $(CFLAGS) -DFB_DEBUG=1 -c $< -o $@
 
 # release zips (run after the commit, so the version matches the binary);
-# the PC GEM zip too when release/FBENCH.APP is there
+# the PC GEM zip too when release/FBENCH.APP is there, with the ST baseline
+# profile(s) from baseline/ to load and compare against
 CWSDPMI ?= $(HOME)/work/vibe/PC-GEM/tools/cwsdpmi/bin
 VER = $(shell cat VERSION).$(shell cat BUILD)
 dist: $(RELEASE) $(DEBUG)
@@ -77,7 +78,7 @@ dist: $(RELEASE) $(DEBUG)
 	@if [ -f release/FBENCH.APP ]; then \
 	  test -f $(CWSDPMI)/CWSDPMI.EXE || { echo "CWSDPMI.EXE not found: set CWSDPMI"; exit 1; }; \
 	  rm -rf dist/pcgem dist/fbench-$(VER)-pcgem.zip; mkdir -p dist/pcgem/FBENCH; \
-	  cp release/FBENCH.APP README.TXT dist/pcgem/FBENCH/; \
+	  cp release/FBENCH.APP README.TXT baseline/*.FBP dist/pcgem/FBENCH/; \
 	  cp LICENSE dist/pcgem/FBENCH/LICENSE.TXT; \
 	  cp $(CWSDPMI)/CWSDPMI.EXE dist/pcgem/FBENCH/; \
 	  cp $(CWSDPMI)/cwsdpmi.doc dist/pcgem/FBENCH/CWSDPMI.DOC; \

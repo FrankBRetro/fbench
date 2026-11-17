@@ -152,7 +152,7 @@ void sysinfo_short(char *buf, short len)
     char t[120];
 #ifdef PCGEM
     sprintf(t, "PC %s DOS %d.%02d GEM %x.%02x %dx%d %dc",
-            cpu_name(), _osmajor, _osminor, _AESversion >> 8, _AESversion & 0xff,
+            cpu_name(), _osmajor, _osminor, pg_aes_version >> 8, pg_aes_version & 0xff,
             scr_w, scr_h, ncolors);
 #else
     Supexec(read_sys);          /* low memory: supervisor only */
@@ -239,7 +239,11 @@ void sysinfo_collect(void)
 
 #endif
     add("#AES / environment");
+#ifdef PCGEM
+    add("AES version     : %x.%02x (GEM's own)", pg_aes_version >> 8, pg_aes_version & 0xff);
+#else
     add("AES version     : %x.%02x", _AESversion >> 8, _AESversion & 0xff);
+#endif
     add("Multitasking    : %s (max apps %d)%s", multitask ? "yes" : "no", _AESnumapps,
         magic_present ? ", MagiC" : "");
     add("Stay in backgr. : %s", polite ? "yes - windows are never topped" : "no");
