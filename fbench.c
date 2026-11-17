@@ -1366,7 +1366,7 @@ static void do_cmd(short cmd)
     case C_ABOUT:
         {
             char al[200];
-            sprintf(al, "[1][Fbench %s|GEM VDI / AES / GDOS benchmark|for Atari ST, STE, TT, Falcon|MultiTOS and XGEM.][ OK ]", FB_VERSION);
+            sprintf(al, "[1][Fbench %s|GEM VDI / AES / GDOS benchmark|for Atari ST, STE, TT, Falcon|MultiTOS and XGEM.|(c) 2026 Francis C Bullen][ OK ]", FB_VERSION);
             form_alert(1, al);
         }
         break;
